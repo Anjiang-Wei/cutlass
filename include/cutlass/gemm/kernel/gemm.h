@@ -369,7 +369,11 @@ struct Gemm {
 
       semaphore.release(lock);
     }
+
+    // if (threadIdx.x == 0 && blockIdx.x == 0) printf("hello from gemm kernel!");
   }
+
+
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

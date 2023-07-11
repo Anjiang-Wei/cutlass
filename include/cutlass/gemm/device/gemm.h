@@ -46,6 +46,8 @@
 #include "cutlass/gemm/device/default_gemm_configuration.h"
 
 #include "cutlass/layout/permute.h"
+#include <vector>
+#include <mscclpp/sm_channel.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -302,6 +304,7 @@ class Gemm {
     TensorRef<ElementC, LayoutC> ref_D;
     typename EpilogueOutputOp::Params epilogue;
     int split_k_slices;
+    std::vector<mscclpp::SmChannel> smChannels;
     // For gather+scatter operations
     int const *gather_A_indices;
     int const *gather_B_indices;
@@ -328,6 +331,7 @@ class Gemm {
       typename EpilogueOutputOp::Params epilogue_ = 
         typename EpilogueOutputOp::Params(),
       int split_k_slices = 1,
+      std::vector<mscclpp::SmChannel>& smChannels_ = std::vector<mscclpp::SmChannel>(),
       int const *gather_A_indices_ = nullptr,
       int const *gather_B_indices_ = nullptr,
       int const *scatter_D_indices_ = nullptr
@@ -339,6 +343,7 @@ class Gemm {
       ref_D(ref_D_),
       epilogue(epilogue_),
       split_k_slices(split_k_slices),
+      smChannels(smChannels_),
       gather_A_indices(gather_A_indices_),
       gather_B_indices(gather_B_indices_),
       scatter_D_indices(scatter_D_indices_) {
@@ -401,7 +406,6 @@ public:
 
   /// Initializes GEMM state from arguments.
   Status initialize(Arguments const &args, void *workspace = nullptr, cudaStream_t stream = nullptr) {
-
     // Determine grid shape
     ThreadblockSwizzle threadblock_swizzle;
 
@@ -490,7 +494,7 @@ public:
         return Status::kErrorInternal;
       }
     }
-
+    // printf("about to call the kernel\n");
     cutlass::Kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params_);
 
     result = cudaGetLastError();
