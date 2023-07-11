@@ -42,6 +42,9 @@
 #include "cutlass/semaphore.h"
 #include "cutlass/arch/arch.h"
 
+#include <vector>
+#include <mscclpp/sm_channel.hpp>
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -85,6 +88,7 @@ struct Gemm {
     int *semaphore;
     int gemm_k_size;
     // For gather+scatter operations
+    std::vector<mscclpp::SmChannel> smChannels;
     int const *gather_A_indices;
     int const *gather_B_indices;
     int const *scatter_D_indices;
@@ -106,6 +110,7 @@ struct Gemm {
       typename Epilogue::OutputTileIterator::TensorRef ref_D,
       typename OutputOp::Params output_op = typename OutputOp::Params(),
       int *workspace = nullptr,
+      std::vector<mscclpp::SmChannel> smChannels_ = std::vector<mscclpp::SmChannel>(),
       int const *gather_A_indices = nullptr,
       int const *gather_B_indices = nullptr,
       int const *scatter_D_indices = nullptr
@@ -122,6 +127,7 @@ struct Gemm {
       params_D(ref_D.layout()),
       ref_D(ref_D),
       output_op(output_op),
+      smChannels(smChannels_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
       scatter_D_indices(scatter_D_indices) {

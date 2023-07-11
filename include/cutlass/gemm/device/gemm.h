@@ -446,6 +446,7 @@ public:
       args.ref_D,
       args.epilogue,
       static_cast<int *>(workspace),
+      args.smChannels,
       args.gather_A_indices,
       args.gather_B_indices,
       args.scatter_D_indices
