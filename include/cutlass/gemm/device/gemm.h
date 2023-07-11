@@ -440,6 +440,12 @@ public:
     cudaMalloc((void**) &smChannel_gpu, args.smChannels.size() * sizeof(mscclpp::SmChannel));
     cudaMemcpy(smChannel_gpu, args.smChannels.data(), args.smChannels.size() * sizeof(mscclpp::SmChannel), cudaMemcpyHostToDevice);
 
+    // todo: find a place to cudaFree the memory
+
+    int* atmoic_counter;
+    cudaMalloc((void**) &atmoic_counter, sizeof(int));
+    cudaMemset(atmoic_counter, 0, sizeof(int));
+
     // Initialize the Params structure
     params_ = typename GemmKernel::Params{
       args.problem_size,
@@ -452,6 +458,7 @@ public:
       static_cast<int *>(workspace),
       smChannel_gpu,
       (int) args.smChannels.size(),
+      atmoic_counter,
       args.gather_A_indices,
       args.gather_B_indices,
       args.scatter_D_indices

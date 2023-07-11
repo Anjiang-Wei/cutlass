@@ -90,6 +90,7 @@ struct Gemm {
     // For gather+scatter operations
     mscclpp::SmChannel* smChannels;
     int channel_size;
+    int* atmoic_counter;
     int const *gather_A_indices;
     int const *gather_B_indices;
     int const *scatter_D_indices;
@@ -113,6 +114,7 @@ struct Gemm {
       int *workspace = nullptr,
       mscclpp::SmChannel* smChannels_ = nullptr,
       int channel_size_ = 0,
+      int* atmoic_counter_ = nullptr,
       int const *gather_A_indices = nullptr,
       int const *gather_B_indices = nullptr,
       int const *scatter_D_indices = nullptr
@@ -131,6 +133,7 @@ struct Gemm {
       output_op(output_op),
       smChannels(smChannels_),
       channel_size(channel_size_),
+      atmoic_counter(atmoic_counter_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
       scatter_D_indices(scatter_D_indices) {
