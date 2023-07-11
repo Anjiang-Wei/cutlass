@@ -436,6 +436,10 @@ public:
       }
     }
 
+    mscclpp::SmChannel* smChannel_gpu;
+    cudaMalloc((void**) &smChannel_gpu, args.smChannels.size() * sizeof(mscclpp::SmChannel));
+    cudaMemcpy(smChannel_gpu, args.smChannels.data(), args.smChannels.size() * sizeof(mscclpp::SmChannel), cudaMemcpyHostToDevice);
+
     // Initialize the Params structure
     params_ = typename GemmKernel::Params{
       args.problem_size,
@@ -446,7 +450,8 @@ public:
       args.ref_D,
       args.epilogue,
       static_cast<int *>(workspace),
-      args.smChannels,
+      smChannel_gpu,
+      (int) args.smChannels.size(),
       args.gather_A_indices,
       args.gather_B_indices,
       args.scatter_D_indices

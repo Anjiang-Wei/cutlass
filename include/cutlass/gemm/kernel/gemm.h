@@ -88,7 +88,8 @@ struct Gemm {
     int *semaphore;
     int gemm_k_size;
     // For gather+scatter operations
-    std::vector<mscclpp::SmChannel> smChannels;
+    mscclpp::SmChannel* smChannels;
+    int channel_size;
     int const *gather_A_indices;
     int const *gather_B_indices;
     int const *scatter_D_indices;
@@ -110,7 +111,8 @@ struct Gemm {
       typename Epilogue::OutputTileIterator::TensorRef ref_D,
       typename OutputOp::Params output_op = typename OutputOp::Params(),
       int *workspace = nullptr,
-      std::vector<mscclpp::SmChannel> smChannels_ = std::vector<mscclpp::SmChannel>(),
+      mscclpp::SmChannel* smChannels_ = nullptr,
+      int channel_size_ = 0,
       int const *gather_A_indices = nullptr,
       int const *gather_B_indices = nullptr,
       int const *scatter_D_indices = nullptr
@@ -128,6 +130,7 @@ struct Gemm {
       ref_D(ref_D),
       output_op(output_op),
       smChannels(smChannels_),
+      channel_size(channel_size_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
       scatter_D_indices(scatter_D_indices) {
@@ -206,7 +209,7 @@ struct Gemm {
 
   /// Executes one GEMM
   CUTLASS_DEVICE
-  void operator()(Params const &params, SharedStorage &shared_storage) {
+  void operator()(Params &params, SharedStorage &shared_storage) {
 
     // Compute threadblock location
     ThreadblockSwizzle threadblock_swizzle;
@@ -374,6 +377,36 @@ struct Gemm {
       }
 
       semaphore.release(lock);
+    }
+
+    __syncthreads();
+    // if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d\n", (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x);
+    size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+    size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
+    for (int i = 0; i < params.channel_size; i++)
+    {
+      for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+      {
+        params.smChannels[i].put((uint64_t) rowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN, threadIdx.x, blockDim.x);
+      }
+    }
+    __syncthreads();
+    if (threadIdx.x == 0)
+    {
+      __threadfence_system();
+      // atomicAdd(params.counter, 1);
+      // if (params.counter == gridDim.x * gridDim.y * gridDim.z)
+      // {
+      //   params.counter = 0;
+      //   for (int i = 0; i < params.channel_size; i++)
+      //   {
+      //     params.smChannels[i].signal();
+      //   }
+      //   for (int i = 0; i < params.channel_size; i++)
+      //   {
+      //     params.smChannels[i].wait();
+      //   }
+      // }
     }
 
     // if (threadIdx.x == 0 && blockIdx.x == 0) printf("hello from gemm kernel!");
