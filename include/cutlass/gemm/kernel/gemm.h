@@ -381,16 +381,19 @@ struct Gemm {
 
       semaphore.release(lock);
     }
-    // return;
+    // if (!(kSplitKSerial && params.grid_tiled_shape.k() > 1 && params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1))
+      // return;
+
     __syncthreads();
-    // if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d\n", (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x);
+    // if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d | gridDim %d %d %d\n", (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, gridDim.x, gridDim.y, gridDim.z);
     size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
     size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
     for (int i = 0; i < params.channel_size; i++)
     {
+      // params.smChannels[i].put((uint64_t) startRowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN * Mma::Shape::kM * sizeof(half_t), threadIdx.x, blockDim.x);
       for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
       {
-        params.smChannels[i].put((uint64_t) rowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN, threadIdx.x, blockDim.x);
+        params.smChannels[i].put((uint64_t) rowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN * sizeof(half_t), threadIdx.x, blockDim.x);
       }
     }
     __syncthreads();
