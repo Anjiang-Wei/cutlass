@@ -54,7 +54,7 @@ namespace kernel {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <
-  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate 
+  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate
   typename Epilogue_,             ///! Epilogue
   typename ThreadblockSwizzle_,   ///! Threadblock swizzling function
   bool SplitKSerial               ///! If true, code supporting split-K via serial reduction is enabled.
@@ -140,7 +140,7 @@ struct Gemm {
 
       int total_gemm_k_iterations = (problem_size.k() + Mma::Shape::kK - 1) / Mma::Shape::kK;
       int gemm_k_iterations = (total_gemm_k_iterations + grid_tiled_shape.k() - 1) / grid_tiled_shape.k();
-      
+
       gemm_k_size = gemm_k_iterations * Mma::Shape::kK;
 
     semaphore = workspace;
@@ -158,7 +158,7 @@ struct Gemm {
   //
 
   CUTLASS_HOST_DEVICE
-  Gemm() { } 
+  Gemm() { }
 
   /// Determines whether kernel satisfies alignment
   CUTLASS_HOST_DEVICE
@@ -240,7 +240,7 @@ struct Gemm {
 
     // Problem size is a function of threadblock index in the K dimension
     int problem_size_k = min(
-      params.problem_size.k(), 
+      params.problem_size.k(),
       (threadblock_tile_offset.k() + 1) * params.gemm_k_size);
 
     // Compute threadblock-scoped matrix multiply-add
@@ -313,7 +313,7 @@ struct Gemm {
 
     // If performing a reduction via split-K, fetch the initial synchronization
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1) {
-      
+
       // Fetch the synchronization lock initially but do not block.
       semaphore.fetch();
 
@@ -342,14 +342,14 @@ struct Gemm {
     );
 
     Epilogue epilogue(
-      shared_storage.epilogue, 
-      thread_idx, 
-      warp_idx, 
+      shared_storage.epilogue,
+      thread_idx,
+      warp_idx,
       lane_idx);
 
     // Wait on the semaphore - this latency may have been covered by iterator construction
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1) {
-        
+
       // For subsequent threadblocks, the source matrix is held in the 'D' tensor.
       if (threadblock_tile_offset.k()) {
         iterator_C = iterator_D;
@@ -360,14 +360,14 @@ struct Gemm {
     }
 
     // Execute the epilogue operator to update the destination tensor.
-    epilogue(output_op, iterator_D, accumulators, iterator_C); 
-    
+    epilogue(output_op, iterator_D, accumulators, iterator_C);
+
     //
     // Release the semaphore
     //
 
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1) {
-      
+
       int lock = 0;
       if (params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1) {
 
@@ -381,7 +381,7 @@ struct Gemm {
 
       semaphore.release(lock);
     }
-
+    // return;
     __syncthreads();
     // if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d\n", (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x);
     size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
@@ -394,22 +394,36 @@ struct Gemm {
       }
     }
     __syncthreads();
-    if (threadIdx.x == 0)
+    bool lastBlock = false;
+    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
     {
-      __threadfence_system();
-      // atomicAdd(params.counter, 1);
-      // if (params.counter == gridDim.x * gridDim.y * gridDim.z)
+      __threadfence();
+      atomicAdd(params.atmoic_counter, 1);
+      if (*params.atmoic_counter == gridDim.x * gridDim.y * gridDim.z)
+      {
+        // printf("before signal %d\n", *params.atmoic_counter);
+        *params.atmoic_counter = 0;
+        lastBlock = true;
+      }
+    }
+    if (lastBlock){
+      int subwarpIndex = threadIdx.x / 8;
+      int subwarpLane = threadIdx.x % 8;
+      if (subwarpIndex < params.channel_size && subwarpLane == 0)
+      {
+        params.smChannels[subwarpIndex].signal();
+      }
+      // __threadfence_system();
+      // printf("channel_size = %d\n", params.channel_size);
+      if (subwarpIndex < 2 * params.channel_size && subwarpIndex >= params.channel_size && subwarpLane == 0)
+      {
+        params.smChannels[subwarpIndex - params.channel_size].wait();
+      } // if go here, then unhandled cuda error
       // {
-      //   params.counter = 0;
-      //   for (int i = 0; i < params.channel_size; i++)
-      //   {
-      //     params.smChannels[i].signal();
-      //   }
-      //   for (int i = 0; i < params.channel_size; i++)
-      //   {
-      //     params.smChannels[i].wait();
-      //   }
-      // }
+      //   params.smChannels[i].wait();
+      // } // if go here, then unhandled cuda error
+
+        // printf("wait finished\n");
     }
 
     // if (threadIdx.x == 0 && blockIdx.x == 0) printf("hello from gemm kernel!");
