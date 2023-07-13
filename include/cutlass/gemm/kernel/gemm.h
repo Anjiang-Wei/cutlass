@@ -90,6 +90,7 @@ struct Gemm {
     // For gather+scatter operations
     mscclpp::SmChannel* smChannels;
     int channel_size;
+    int rank;
     int* atmoic_counter;
     int const *gather_A_indices;
     int const *gather_B_indices;
@@ -114,6 +115,7 @@ struct Gemm {
       int *workspace = nullptr,
       mscclpp::SmChannel* smChannels_ = nullptr,
       int channel_size_ = 0,
+      int rank_ = 0,
       int* atmoic_counter_ = nullptr,
       int const *gather_A_indices = nullptr,
       int const *gather_B_indices = nullptr,
@@ -133,6 +135,7 @@ struct Gemm {
       output_op(output_op),
       smChannels(smChannels_),
       channel_size(channel_size_),
+      rank(rank_),
       atmoic_counter(atmoic_counter_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
@@ -383,17 +386,36 @@ struct Gemm {
     }
     // if (!(kSplitKSerial && params.grid_tiled_shape.k() > 1 && params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1))
       // return;
+    // return;
+    if (params.channel_size == 0)
+      return;
 
     __syncthreads();
-    // if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d | gridDim %d %d %d\n", (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, gridDim.x, gridDim.y, gridDim.z);
+    if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d %d | gridDim %d %d %d\n", 
+      (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, blockDim.y, gridDim.x, gridDim.y, gridDim.z);
     size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
     size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
+    if (threadIdx.x == 0)
+    {
+      printf("DEBUG startColIndex = %d\n", startColIndex);
+      printf("DEBUG  threadblock_tile_offset.m()=%d, n=%d, k=%d\n", threadblock_tile_offset.m(), threadblock_tile_offset.n(), threadblock_tile_offset.k());
+    }
     for (int i = 0; i < params.channel_size; i++)
     {
       // params.smChannels[i].put((uint64_t) startRowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN * Mma::Shape::kM * sizeof(half_t), threadIdx.x, blockDim.x);
       for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
       {
-        params.smChannels[i].put((uint64_t) rowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN * sizeof(half_t), threadIdx.x, blockDim.x);
+        int real_kN = (int) params.problem_size.n() < (int) Mma::Shape::kN ? (int) params.problem_size.n() : (int) Mma::Shape::kN;
+        params.smChannels[i].put(rowIndex * real_kN * (params.channel_size+1) * sizeof(cutlass::half_t) + startColIndex + params.rank * 16 * sizeof(cutlass::half_t),
+                                16 * sizeof(cutlass::half_t), threadIdx.x, blockDim.x);
+        if (threadIdx.x == 0)
+        {
+          printf("offset %d, rank = %d\n", params.rank * 16 * 16, params.rank);
+          printf("comparison %d %d, %d\n", params.problem_size.n(), Mma::Shape::kN, real_kN);
+          printf("rowIndex=%d, params.problem_size.n()=%d, startColIndex=%d, real_kN=%d, sizeof=%d, bytes=%d\n",
+                (int) rowIndex, (int) params.problem_size.n(), (int) startColIndex,
+                (int) real_kN, (int) sizeof(cutlass::half_t), (int) (real_kN * sizeof(cutlass::half_t)));
+        }
       }
     }
     __syncthreads();
@@ -404,12 +426,26 @@ struct Gemm {
       atomicAdd(params.atmoic_counter, 1);
       if (*params.atmoic_counter == gridDim.x * gridDim.y * gridDim.z)
       {
-        // printf("before signal %d\n", *params.atmoic_counter);
+        // printf("before signal %d, rank %d\n", *params.atmoic_counter, params.rank);
         *params.atmoic_counter = 0;
         lastBlock = true;
       }
     }
-    if (lastBlock){
+    if (lastBlock) {
+      // if (threadIdx.x == 0)
+      // {
+      //   printf("signal+wait\n");
+      //   for (int i = 0; i < params.channel_size; i++)
+      //   {
+      //     params.smChannels[i].signal();
+      //   }
+      //   __syncthreads();
+      //   for (int i = 0; i < params.channel_size; i++)
+      //   {
+      //     params.smChannels[i].wait();
+      //   }
+      // }
+      
       int subwarpIndex = threadIdx.x / 8;
       int subwarpLane = threadIdx.x % 8;
       if (subwarpIndex < params.channel_size && subwarpLane == 0)
@@ -421,12 +457,7 @@ struct Gemm {
       if (subwarpIndex < 2 * params.channel_size && subwarpIndex >= params.channel_size && subwarpLane == 0)
       {
         params.smChannels[subwarpIndex - params.channel_size].wait();
-      } // if go here, then unhandled cuda error
-      // {
-      //   params.smChannels[i].wait();
-      // } // if go here, then unhandled cuda error
-
-        // printf("wait finished\n");
+      }
     }
 
     // if (threadIdx.x == 0 && blockIdx.x == 0) printf("hello from gemm kernel!");

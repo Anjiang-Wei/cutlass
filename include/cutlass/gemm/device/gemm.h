@@ -305,6 +305,7 @@ class Gemm {
     typename EpilogueOutputOp::Params epilogue;
     int split_k_slices;
     std::vector<mscclpp::SmChannel> smChannels;
+    int rank;
     // For gather+scatter operations
     int const *gather_A_indices;
     int const *gather_B_indices;
@@ -332,6 +333,7 @@ class Gemm {
         typename EpilogueOutputOp::Params(),
       int split_k_slices = 1,
       std::vector<mscclpp::SmChannel>& smChannels_ = std::vector<mscclpp::SmChannel>(),
+      int rank_ = 0,
       int const *gather_A_indices_ = nullptr,
       int const *gather_B_indices_ = nullptr,
       int const *scatter_D_indices_ = nullptr
@@ -344,6 +346,7 @@ class Gemm {
       epilogue(epilogue_),
       split_k_slices(split_k_slices),
       smChannels(smChannels_),
+      rank(rank_),
       gather_A_indices(gather_A_indices_),
       gather_B_indices(gather_B_indices_),
       scatter_D_indices(scatter_D_indices_) {
@@ -460,6 +463,7 @@ public:
       static_cast<int *>(workspace),
       smChannel_gpu,
       (int) args.smChannels.size(),
+      args.rank,
       atmoic_counter,
       args.gather_A_indices,
       args.gather_B_indices,
