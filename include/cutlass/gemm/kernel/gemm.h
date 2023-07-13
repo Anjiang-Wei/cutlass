@@ -406,8 +406,8 @@ struct Gemm {
       for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
       {
         int real_kN = (int) params.problem_size.n() < (int) Mma::Shape::kN ? (int) params.problem_size.n() : (int) Mma::Shape::kN;
-        params.smChannels[i].put(rowIndex * real_kN * (params.channel_size+1) * sizeof(cutlass::half_t) + startColIndex + params.rank * 16 * sizeof(cutlass::half_t),
-                                16 * sizeof(cutlass::half_t), threadIdx.x, blockDim.x);
+        params.smChannels[i].put(rowIndex * real_kN * (params.channel_size+1) * sizeof(cutlass::half_t) + startColIndex + params.rank * 64 / 4 * sizeof(cutlass::half_t),
+                                64 / 4 * sizeof(cutlass::half_t), threadIdx.x, blockDim.x);
         if (threadIdx.x == 0)
         {
           printf("offset %d, rank = %d\n", params.rank * 16 * 16, params.rank);
@@ -432,32 +432,34 @@ struct Gemm {
       }
     }
     if (lastBlock) {
-      // if (threadIdx.x == 0)
-      // {
-      //   printf("signal+wait\n");
-      //   for (int i = 0; i < params.channel_size; i++)
+      if (threadIdx.x == 0)
+      {
+        printf("signal+wait\n");
+        for (int i = 0; i < params.channel_size; i++)
+        {
+          params.smChannels[i].signal();
+        }
+        // __syncthreads();
+        for (int i = 0; i < params.channel_size; i++)
+        {
+          params.smChannels[i].wait();
+        }
+      }
+
+      // if (threadIdx.x < warpSize) {
+      //   int subwarpIndex = threadIdx.x / 8;
+      //   int subwarpLane = threadIdx.x % 8;
+      //   if (subwarpIndex < params.channel_size && subwarpLane == 0)
       //   {
-      //     params.smChannels[i].signal();
+      //     params.smChannels[subwarpIndex].signal();
       //   }
-      //   __syncthreads();
-      //   for (int i = 0; i < params.channel_size; i++)
+      //   // __threadfence_system();
+      //   // printf("channel_size = %d\n", params.channel_size);
+      //   if (subwarpIndex < 2 * params.channel_size && subwarpIndex >= params.channel_size && subwarpLane == 0)
       //   {
-      //     params.smChannels[i].wait();
+      //     params.smChannels[subwarpIndex - params.channel_size].wait();
       //   }
       // }
-      
-      int subwarpIndex = threadIdx.x / 8;
-      int subwarpLane = threadIdx.x % 8;
-      if (subwarpIndex < params.channel_size && subwarpLane == 0)
-      {
-        params.smChannels[subwarpIndex].signal();
-      }
-      // __threadfence_system();
-      // printf("channel_size = %d\n", params.channel_size);
-      if (subwarpIndex < 2 * params.channel_size && subwarpIndex >= params.channel_size && subwarpLane == 0)
-      {
-        params.smChannels[subwarpIndex - params.channel_size].wait();
-      }
     }
 
     // if (threadIdx.x == 0 && blockIdx.x == 0) printf("hello from gemm kernel!");
