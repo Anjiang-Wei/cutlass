@@ -469,6 +469,7 @@ struct Gemm {
         }
       }
 
+      // the following code does not work for B=1, H=64; works for H=12288
       // if (threadIdx.x < warpSize) {
       //   int subwarpIndex = threadIdx.x / 8;
       //   int subwarpLane = threadIdx.x % 8;
