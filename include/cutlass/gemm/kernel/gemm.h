@@ -446,8 +446,8 @@ struct Gemm {
     if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
     {
       __threadfence();
-      atomicAdd(params.atmoic_counter, 1);
-      if (*params.atmoic_counter == gridDim.x * gridDim.y * gridDim.z)
+      int old_value = atomicAdd(params.atmoic_counter, 1);
+      if (old_value + 1 == gridDim.x * gridDim.y * gridDim.z)
       {
         // printf("before signal %d, rank %d\n", *params.atmoic_counter, params.rank);
         *params.atmoic_counter = 0;
@@ -463,25 +463,26 @@ struct Gemm {
           params.smChannels[i].signal();
         }
         // __syncthreads();
+        // __threadfence_system();
         for (int i = 0; i < params.channel_size; i++)
         {
           params.smChannels[i].wait();
         }
       }
 
-      // the following code does not work for B=1, H=64; works for H=12288
+      // // the following code does not work for B=1, H=64; works for H=12288
       // if (threadIdx.x < warpSize) {
-      //   int subwarpIndex = threadIdx.x / 8;
-      //   int subwarpLane = threadIdx.x % 8;
-      //   if (subwarpIndex < params.channel_size && subwarpLane == 0)
+      //   int subwarpIndex = threadIdx.x / warpSize;
+      //   int subwarpLane = threadIdx.x % warpSize;
+      //   if (subwarpLane < params.channel_size)
       //   {
-      //     params.smChannels[subwarpIndex].signal();
+      //     params.smChannels[subwarpLane].signal();
       //   }
-      //   // __threadfence_system();
+      //   __threadfence_system();
       //   // printf("channel_size = %d\n", params.channel_size);
-      //   if (subwarpIndex < 2 * params.channel_size && subwarpIndex >= params.channel_size && subwarpLane == 0)
+      //   if (subwarpLane < 2 * params.channel_size && subwarpLane >= params.channel_size)
       //   {
-      //     params.smChannels[subwarpIndex - params.channel_size].wait();
+      //     params.smChannels[subwarpLane - params.channel_size].wait();
       //   }
       // }
     }
