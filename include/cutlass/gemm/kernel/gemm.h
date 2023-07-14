@@ -402,7 +402,7 @@ struct Gemm {
       printf("DEBUG  threadblock_tile_offset.m()=%d, n=%d, k=%d\n", threadblock_tile_offset.m(), threadblock_tile_offset.n(), threadblock_tile_offset.k());
     }
     int cnt = 0;
-            int H = 8192 / 4;
+    // int H = 8192 / 4;
             
     if (threadIdx.x == 0) {
       for (auto idx = startColIndex;  idx < startColIndex + Mma::Shape::kN; idx++)
@@ -420,23 +420,24 @@ struct Gemm {
       // params.smChannels[i].put((uint64_t) startRowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN * Mma::Shape::kM * sizeof(half_t), threadIdx.x, blockDim.x);
       for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
       {
-        int real_kN = (int) params.problem_size.n() < (int) Mma::Shape::kN ? (int) params.problem_size.n() : (int) Mma::Shape::kN;
+        // int real_kN = (int) params.problem_size.n() < (int) Mma::Shape::kN ? (int) params.problem_size.n() : (int) Mma::Shape::kN;
         // todo: min(H, Mma::Shape::kN)
-        params.smChannels[i].put(rowIndex * real_kN * (params.channel_size+1) * sizeof(cutlass::half_t)
-                                + startColIndex * sizeof(cutlass::half_t) + params.rank *  H * sizeof(cutlass::half_t),
-                                 min(H, Mma::Shape::kN) * sizeof(cutlass::half_t), threadIdx.x, blockDim.x);
+        params.smChannels[i].put(rowIndex * params.problem_size.n() * (params.channel_size+1) * sizeof(cutlass::half_t)
+                                + startColIndex * sizeof(cutlass::half_t) + params.rank *  params.problem_size.n() * sizeof(cutlass::half_t),
+                                 min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t), threadIdx.x, blockDim.x);
         int cnt = 0;
         if (threadIdx.x == 0)
         {
           printf("same number cnt = %d\n", cnt);
           printf("blockIdx.y %d startColIndex %d, params.rank %d index sum: %ld\n", blockIdx.y, (int)startColIndex, (int)params.rank,
-                                rowIndex * real_kN * (params.channel_size+1) * sizeof(cutlass::half_t)
-                                + startColIndex * sizeof(cutlass::half_t) + params.rank *  H * sizeof(cutlass::half_t));
+                                rowIndex * params.problem_size.n() * (params.channel_size+1) * sizeof(cutlass::half_t)
+                                + startColIndex * sizeof(cutlass::half_t) + params.rank *  params.problem_size.n() * sizeof(cutlass::half_t),
+                                 min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t));
           printf("offset %d, rank = %d\n", params.rank * 16 * 16, params.rank);
-          printf("comparison %d %d, %d\n", params.problem_size.n(), Mma::Shape::kN, real_kN);
-          printf("rowIndex=%d, params.problem_size.n()=%d, startColIndex=%d, real_kN=%d, sizeof=%d, bytes=%d\n",
+          printf("comparison %d %d\n", params.problem_size.n(), Mma::Shape::kN);
+          printf("rowIndex=%d, params.problem_size.n()=%d, startColIndex=%d, sizeof=%d\n",
                 (int) rowIndex, (int) params.problem_size.n(), (int) startColIndex,
-                (int) real_kN, (int) sizeof(cutlass::half_t), (int) (real_kN * sizeof(cutlass::half_t)));
+                (int) sizeof(cutlass::half_t));
         }
       }
     }
