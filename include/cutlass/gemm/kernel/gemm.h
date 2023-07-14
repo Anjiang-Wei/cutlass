@@ -389,21 +389,20 @@ struct Gemm {
     // return;
     if (params.channel_size == 0)
       return;
+    
+    size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+    size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
 
+#ifdef DBEUG_CUDA
     __syncthreads();
     __threadfence_system();
     if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d %d | gridDim %d %d %d\n", 
       (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, blockDim.y, gridDim.x, gridDim.y, gridDim.z);
-    size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
-    size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
     if (threadIdx.x == 0)
     {
       printf("DEBUG startColIndex = %d\n", startColIndex);
       printf("DEBUG  threadblock_tile_offset.m()=%d, n=%d, k=%d\n", threadblock_tile_offset.m(), threadblock_tile_offset.n(), threadblock_tile_offset.k());
     }
-    int cnt = 0;
-    // int H = 8192 / 4;
-            
     if (threadIdx.x == 0) {
       for (auto idx = startColIndex;  idx < startColIndex + Mma::Shape::kN; idx++)
       {
@@ -414,31 +413,32 @@ struct Gemm {
         }
       }
     }
+    for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+    {
+      if (threadIdx.x == 0)
+      {
+        printf("blockIdx.y %d startColIndex %d, params.rank %d index sum: %ld\n", blockIdx.y, (int)startColIndex, (int)params.rank,
+                              rowIndex * params.problem_size.n() * (params.channel_size+1) * sizeof(cutlass::half_t)
+                              + startColIndex * sizeof(cutlass::half_t) + params.rank *  params.problem_size.n() * sizeof(cutlass::half_t),
+                                min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t));
+        printf("offset %d, rank = %d\n", params.rank * 16 * 16, params.rank);
+        printf("comparison %d %d\n", params.problem_size.n(), Mma::Shape::kN);
+        printf("rowIndex=%d, params.problem_size.n()=%d, startColIndex=%d, sizeof=%d\n",
+              (int) rowIndex, (int) params.problem_size.n(), (int) startColIndex,
+              (int) sizeof(cutlass::half_t));
+      }
+    }
+#endif
 
     for (int i = 0; i < params.channel_size; i++)
     {
-      // params.smChannels[i].put((uint64_t) startRowIndex * params.problem_size.n() + startColIndex, (uint64_t) Mma::Shape::kN * Mma::Shape::kM * sizeof(half_t), threadIdx.x, blockDim.x);
       for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
       {
-        // int real_kN = (int) params.problem_size.n() < (int) Mma::Shape::kN ? (int) params.problem_size.n() : (int) Mma::Shape::kN;
-        // todo: min(H, Mma::Shape::kN)
-        params.smChannels[i].put(rowIndex * params.problem_size.n() * (params.channel_size+1) * sizeof(cutlass::half_t)
-                                + startColIndex * sizeof(cutlass::half_t) + params.rank *  params.problem_size.n() * sizeof(cutlass::half_t),
-                                 min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t), threadIdx.x, blockDim.x);
-        int cnt = 0;
-        if (threadIdx.x == 0)
-        {
-          printf("same number cnt = %d\n", cnt);
-          printf("blockIdx.y %d startColIndex %d, params.rank %d index sum: %ld\n", blockIdx.y, (int)startColIndex, (int)params.rank,
-                                rowIndex * params.problem_size.n() * (params.channel_size+1) * sizeof(cutlass::half_t)
-                                + startColIndex * sizeof(cutlass::half_t) + params.rank *  params.problem_size.n() * sizeof(cutlass::half_t),
-                                 min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t));
-          printf("offset %d, rank = %d\n", params.rank * 16 * 16, params.rank);
-          printf("comparison %d %d\n", params.problem_size.n(), Mma::Shape::kN);
-          printf("rowIndex=%d, params.problem_size.n()=%d, startColIndex=%d, sizeof=%d\n",
-                (int) rowIndex, (int) params.problem_size.n(), (int) startColIndex,
-                (int) sizeof(cutlass::half_t));
-        }
+        int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+        int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
+        params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+                                 min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+                                 threadIdx.x, blockDim.x);
       }
     }
     __syncthreads();
@@ -457,7 +457,7 @@ struct Gemm {
     if (lastBlock) {
       if (threadIdx.x == 0)
       {
-        printf("signal+wait\n");
+        // printf("signal+wait\n");
         for (int i = 0; i < params.channel_size; i++)
         {
           params.smChannels[i].signal();
