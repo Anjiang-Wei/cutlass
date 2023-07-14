@@ -393,6 +393,7 @@ struct Gemm {
     size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
     size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
 
+// #define DBEUG_CUDA
 #ifdef DBEUG_CUDA
     __syncthreads();
     __threadfence_system();
