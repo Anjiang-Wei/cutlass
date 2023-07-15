@@ -284,10 +284,12 @@ struct Gemm {
     typename Mma::FragmentC accumulators;
 
     accumulators.clear();
-
+#define USEGEMM
     if (!kSplitKSerial || gemm_k_iterations > 0) {
       // Compute threadblock-scoped matrix multiply-add
+#ifdef USEGEMM
       mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators);
+#endif
     }
 
     //
@@ -362,8 +364,10 @@ struct Gemm {
 
     }
 
+#ifdef USEGEMM
     // Execute the epilogue operator to update the destination tensor.
     epilogue(output_op, iterator_D, accumulators, iterator_C);
+#endif
 
     //
     // Release the semaphore
@@ -433,6 +437,13 @@ struct Gemm {
 
     for (int i = 0; i < params.channel_size; i++)
     {
+      // Copy the same amount of data using the only put (imitating 2D copy)
+      // int row_skip = 0 * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+      // int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
+      // params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+      //                           min(params.problem_size.n(), Mma::Shape::kN * Mma::Shape::kM) * sizeof(cutlass::half_t),
+      //                           threadIdx.x, blockDim.x);
+
       for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
       {
         int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
