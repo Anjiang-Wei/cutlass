@@ -439,6 +439,7 @@ struct Gemm {
 #endif
     if (params.kernel_case == 0)
     {
+      // partition by column - overlapgather.cu
       for (int i = 0; i < params.channel_size; i++)
       {
         // Copy the same amount of data using the only put (imitating 2D copy)
@@ -452,6 +453,23 @@ struct Gemm {
         {
           int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
           int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
+          params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+                                  min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+                                  threadIdx.x, blockDim.x);
+        }
+      }
+    }
+    else if (params.kernel_case == 1)
+    {
+      // transpose the weight matrix; overlaptranspose.cu
+      for (int i = 0; i < params.channel_size; i++)
+      {
+        for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+        {
+          // if (threadIdx.x == 0)
+          //   printf("rowIndex %d\n", rowIndex);
+          int row_skip = rowIndex * params.problem_size.n() + params.rank * params.problem_size.m() * params.problem_size.n(); // whole row SM skip + rank skip
+          int column_skip = startColIndex; // SM skip
           params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
                                   min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
                                   threadIdx.x, blockDim.x);
