@@ -91,6 +91,7 @@ struct Gemm {
     mscclpp::SmChannel* smChannels;
     int channel_size;
     int rank;
+    int kernel_case;
     int* atmoic_counter;
     int const *gather_A_indices;
     int const *gather_B_indices;
@@ -116,6 +117,7 @@ struct Gemm {
       mscclpp::SmChannel* smChannels_ = nullptr,
       int channel_size_ = 0,
       int rank_ = 0,
+      int kernel_case_ = -1,
       int* atmoic_counter_ = nullptr,
       int const *gather_A_indices = nullptr,
       int const *gather_B_indices = nullptr,
@@ -136,6 +138,7 @@ struct Gemm {
       smChannels(smChannels_),
       channel_size(channel_size_),
       rank(rank_),
+      kernel_case(kernel_case_),
       atmoic_counter(atmoic_counter_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
@@ -434,24 +437,31 @@ struct Gemm {
       }
     }
 #endif
-
-    for (int i = 0; i < params.channel_size; i++)
+    if (params.kernel_case == 0)
     {
-      // Copy the same amount of data using the only put (imitating 2D copy)
-      // int row_skip = 0 * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
-      // int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
-      // params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
-      //                           min(params.problem_size.n(), Mma::Shape::kN * Mma::Shape::kM) * sizeof(cutlass::half_t),
-      //                           threadIdx.x, blockDim.x);
-
-      for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+      for (int i = 0; i < params.channel_size; i++)
       {
-        int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
-        int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
-        params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
-                                 min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
-                                 threadIdx.x, blockDim.x);
+        // Copy the same amount of data using the only put (imitating 2D copy)
+        // int row_skip = 0 * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+        // int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
+        // params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+        //                           min(params.problem_size.n(), Mma::Shape::kN * Mma::Shape::kM) * sizeof(cutlass::half_t),
+        //                           threadIdx.x, blockDim.x);
+
+        for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+        {
+          int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+          int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
+          params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+                                  min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+                                  threadIdx.x, blockDim.x);
+        }
       }
+    }
+    else
+    {
+      printf("Not implemented kernel_case %d\n", params.kernel_case);
+      return;
     }
     __syncthreads();
     bool lastBlock = false;

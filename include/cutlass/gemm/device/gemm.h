@@ -306,6 +306,7 @@ class Gemm {
     int split_k_slices;
     std::vector<mscclpp::SmChannel> smChannels;
     int rank;
+    int kernel_case;
     // For gather+scatter operations
     int const *gather_A_indices;
     int const *gather_B_indices;
@@ -334,6 +335,7 @@ class Gemm {
       int split_k_slices = 1,
       std::vector<mscclpp::SmChannel>& smChannels_ = std::vector<mscclpp::SmChannel>(),
       int rank_ = 0,
+      int kernel_case_ = -1,
       int const *gather_A_indices_ = nullptr,
       int const *gather_B_indices_ = nullptr,
       int const *scatter_D_indices_ = nullptr
@@ -347,6 +349,7 @@ class Gemm {
       split_k_slices(split_k_slices),
       smChannels(smChannels_),
       rank(rank_),
+      kernel_case(kernel_case_),
       gather_A_indices(gather_A_indices_),
       gather_B_indices(gather_B_indices_),
       scatter_D_indices(scatter_D_indices_) {
@@ -464,6 +467,7 @@ public:
       smChannel_gpu,
       (int) args.smChannels.size(),
       args.rank,
+      args.kernel_case,
       atmoic_counter,
       args.gather_A_indices,
       args.gather_B_indices,
