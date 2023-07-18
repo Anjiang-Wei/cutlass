@@ -47,7 +47,7 @@
 
 #include "cutlass/layout/permute.h"
 #include <vector>
-#include <mscclpp/sm_channel.hpp>
+#include "mscclpp/sm_channel.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 
