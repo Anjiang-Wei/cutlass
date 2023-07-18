@@ -43,7 +43,7 @@
 #include "cutlass/arch/arch.h"
 
 #include <vector>
-#include <mscclpp/sm_channel.hpp>
+#include "mscclpp/sm_channel.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -397,8 +397,8 @@ struct Gemm {
     if (params.channel_size == 0)
       return;
     
-    size_t startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
-    size_t startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
+    int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+    int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
 
 // #define DBEUG_CUDA
 #ifdef DBEUG_CUDA
@@ -440,23 +440,27 @@ struct Gemm {
     if (params.kernel_case == 0)
     {
       // partition by column - overlapgather.cu
+      int nextRank = params.rank + 1;
       for (int i = 0; i < params.channel_size; i++)
       {
-        // Copy the same amount of data using the only put (imitating 2D copy)
-        // int row_skip = 0 * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
-        // int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
-        // params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
-        //                           min(params.problem_size.n(), Mma::Shape::kN * Mma::Shape::kM) * sizeof(cutlass::half_t),
-        //                           threadIdx.x, blockDim.x);
-
-        for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
-        {
+        if (nextRank >= params.channel_size) {
+          nextRank -= params.channel_size;
+        }
+        // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
+        const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16; // = 32
+        const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+        const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+        for (int rowIndex = startRowIndex + RowCopyGroupIdx; 
+             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
+             rowIndex += RowCopyGroup) {
           int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
           int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
-          params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+
+          params.smChannels[nextRank].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
                                   min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
-                                  threadIdx.x, blockDim.x);
+                                  threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
+        nextRank++;
       }
     }
     else if (params.kernel_case == 1)
