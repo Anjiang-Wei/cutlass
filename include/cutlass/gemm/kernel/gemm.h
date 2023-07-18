@@ -466,18 +466,29 @@ struct Gemm {
     else if (params.kernel_case == 1)
     {
       // transpose the weight matrix; overlaptranspose.cu
+      int nextRank = params.rank + 1;
       for (int i = 0; i < params.channel_size; i++)
       {
-        for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+        if (nextRank >= params.channel_size) {
+          nextRank -= params.channel_size;
+        }
+        // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
+        const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16; // = 32
+        const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+        const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+        for (int rowIndex = startRowIndex + RowCopyGroupIdx;
+             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
+             rowIndex += RowCopyGroup)
         {
           // if (threadIdx.x == 0)
           //   printf("rowIndex %d\n", rowIndex);
           int row_skip = rowIndex * params.problem_size.n() + params.rank * params.problem_size.m() * params.problem_size.n(); // whole row SM skip + rank skip
           int column_skip = startColIndex; // SM skip
-          params.smChannels[i].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+          params.smChannels[nextRank].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
                                   min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
-                                  threadIdx.x, blockDim.x);
+                                  threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
+        nextRank++;
       }
     }
     else
