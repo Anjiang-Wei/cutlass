@@ -44,6 +44,8 @@
 
 #include <vector>
 #include "mscclpp/sm_channel.hpp"
+#include "mscclpp/proxy.hpp"
+#include "mscclpp/fifo.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -90,6 +92,8 @@ struct Gemm {
     // For gather+scatter operations
     mscclpp::SmChannel* smChannels;
     int channel_size;
+    mscclpp::DeviceProxyFifo fifo;
+    mscclpp::Host2DeviceSemaphore::DeviceHandle* handles;
     int rank;
     int kernel_case;
     int* atmoic_counter;
@@ -116,6 +120,8 @@ struct Gemm {
       int *workspace = nullptr,
       mscclpp::SmChannel* smChannels_ = nullptr,
       int channel_size_ = 0,
+      mscclpp::DeviceProxyFifo fifo_ = mscclpp::DeviceProxyFifo(),
+      mscclpp::Host2DeviceSemaphore::DeviceHandle* handles_ = nullptr,
       int rank_ = 0,
       int kernel_case_ = -1,
       int* atmoic_counter_ = nullptr,
@@ -137,12 +143,16 @@ struct Gemm {
       output_op(output_op),
       smChannels(smChannels_),
       channel_size(channel_size_),
+      fifo(fifo_),
+      handles(handles_),
       rank(rank_),
       kernel_case(kernel_case_),
       atmoic_counter(atmoic_counter_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
       scatter_D_indices(scatter_D_indices) {
+
+      printf("handles inside Params %p\n", handles);
 
       int total_gemm_k_iterations = (problem_size.k() + Mma::Shape::kK - 1) / Mma::Shape::kK;
       int gemm_k_iterations = (total_gemm_k_iterations + grid_tiled_shape.k() - 1) / grid_tiled_shape.k();
@@ -493,8 +503,44 @@ struct Gemm {
     }
     else if (params.kernel_case == 2)
     {
-      // overlapcpu, partition by column like overlapgather.cu
+      // printf("params.kernel_case=2 starts, handles=%p\n", params.handles);
+      // // overlapcpu, partition by column like overlapgather.cu
+      // int tid = threadIdx.x;
+      // __syncthreads();
+      // // uint64_t tail;
+      // if (tid == 0) {
+      //   mscclpp::ProxyTrigger trigger;
+      //   trigger.fst = handleIndex;
+      //   fifo.push(trigger);
+      //   // tail = fifo.push(trigger);
+      // }
+      // if (tid != r) handles[tid].wait();
 
+      // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
+      const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16; // = 32
+      const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+      const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+      for (int rowIndex = startRowIndex + RowCopyGroupIdx; 
+            rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
+            rowIndex += RowCopyGroup) {
+        int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+        int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
+
+        // params.smChannels[nextRank].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+        //                         min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+        //                         threadIdx.x % ColCopyThreads, ColCopyThreads);
+        if (threadIdx.x == 0)
+        {
+          mscclpp::ProxyTrigger trigger;
+          printf("enter gemm kernel %d\n", params.kernel_case);
+          trigger.fst = sizeof(cutlass::half_t) * (row_skip + column_skip); // offset
+          trigger.snd = (min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t)); // transmit_size
+          printf("trigger.fst %d, trigger.snd %d\n", (int) trigger.fst, (int) trigger.snd);
+          params.fifo.push(trigger);
+        }
+        // handles[?].wait()
+
+      }
     }
     else
     {
@@ -515,36 +561,62 @@ struct Gemm {
       }
     }
     if (lastBlock) {
-      if (threadIdx.x == 0)
+      if (params.kernel_case == 0 || params.kernel_case == 1)
       {
-        // printf("signal+wait\n");
-        for (int i = 0; i < params.channel_size; i++)
+        if (threadIdx.x == 0)
         {
-          params.smChannels[i].signal();
+          // printf("signal+wait\n");
+          for (int i = 0; i < params.channel_size; i++)
+          {
+            params.smChannels[i].signal();
+          }
+          // __syncthreads();
+          // __threadfence_system();
+          for (int i = 0; i < params.channel_size; i++)
+          {
+            params.smChannels[i].wait();
+          }
         }
-        // __syncthreads();
-        // __threadfence_system();
-        for (int i = 0; i < params.channel_size; i++)
+
+        // // the following code does not work for B=1, H=64; works for H=12288
+        // if (threadIdx.x < warpSize) {
+        //   int subwarpIndex = threadIdx.x / warpSize;
+        //   int subwarpLane = threadIdx.x % warpSize;
+        //   if (subwarpLane < params.channel_size)
+        //   {
+        //     params.smChannels[subwarpLane].signal();
+        //   }
+        //   __threadfence_system();
+        //   // printf("channel_size = %d\n", params.channel_size);
+        //   if (subwarpLane < 2 * params.channel_size && subwarpLane >= params.channel_size)
+        //   {
+        //     params.smChannels[subwarpLane - params.channel_size].wait();
+        //   }
+        // }
+      }
+      else if (params.kernel_case == 2)
+      {
+        if (threadIdx.x == 0)
         {
-          params.smChannels[i].wait();
+          // printf("last block kernel_case = 2 %p\n", params.handles);
+          // params.handles[0].wait();
+          // todo: change 4 to params.channel_size + 1
+          for (int i = 0; i < 4; i++)
+          {
+            if (i != params.rank)
+            {
+              printf("for rank %d, last block params.handles[%d] = %p\n", params.rank, i, (params.handles + i));
+              params.handles[i].wait();
+              printf("wait() successfully invoked for rank %d, %d, %d", params.rank, i, (params.handles + i));
+            }
+          }
         }
       }
-
-      // // the following code does not work for B=1, H=64; works for H=12288
-      // if (threadIdx.x < warpSize) {
-      //   int subwarpIndex = threadIdx.x / warpSize;
-      //   int subwarpLane = threadIdx.x % warpSize;
-      //   if (subwarpLane < params.channel_size)
-      //   {
-      //     params.smChannels[subwarpLane].signal();
-      //   }
-      //   __threadfence_system();
-      //   // printf("channel_size = %d\n", params.channel_size);
-      //   if (subwarpLane < 2 * params.channel_size && subwarpLane >= params.channel_size)
-      //   {
-      //     params.smChannels[subwarpLane - params.channel_size].wait();
-      //   }
-      // }
+      else
+      {
+        printf("Not implemented kernel_case %d\n", params.kernel_case);
+        return;
+      }
     }
 
     // if (threadIdx.x == 0 && blockIdx.x == 0) printf("hello from gemm kernel!");

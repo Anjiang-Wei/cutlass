@@ -48,6 +48,8 @@
 #include "cutlass/layout/permute.h"
 #include <vector>
 #include "mscclpp/sm_channel.hpp"
+#include "mscclpp/proxy.hpp"
+#include "mscclpp/fifo.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -305,6 +307,8 @@ class Gemm {
     typename EpilogueOutputOp::Params epilogue;
     int split_k_slices;
     std::vector<mscclpp::SmChannel> smChannels;
+    mscclpp::DeviceProxyFifo fifo;
+    mscclpp::Host2DeviceSemaphore::DeviceHandle* handles;
     int rank;
     int kernel_case;
     // For gather+scatter operations
@@ -334,6 +338,8 @@ class Gemm {
         typename EpilogueOutputOp::Params(),
       int split_k_slices = 1,
       std::vector<mscclpp::SmChannel>& smChannels_ = std::vector<mscclpp::SmChannel>(),
+      mscclpp::DeviceProxyFifo& fifo_ = mscclpp::DeviceProxyFifo(),
+      mscclpp::Host2DeviceSemaphore::DeviceHandle* handles_ = nullptr,
       int rank_ = 0,
       int kernel_case_ = -1,
       int const *gather_A_indices_ = nullptr,
@@ -348,6 +354,8 @@ class Gemm {
       epilogue(epilogue_),
       split_k_slices(split_k_slices),
       smChannels(smChannels_),
+      fifo(fifo_),
+      handles(handles_),
       rank(rank_),
       kernel_case(kernel_case_),
       gather_A_indices(gather_A_indices_),
@@ -445,6 +453,7 @@ public:
     mscclpp::SmChannel* smChannel_gpu;
     cudaMalloc((void**) &smChannel_gpu, args.smChannels.size() * sizeof(mscclpp::SmChannel));
     cudaMemcpy(smChannel_gpu, args.smChannels.data(), args.smChannels.size() * sizeof(mscclpp::SmChannel), cudaMemcpyHostToDevice);
+    
 
     // todo: find a place to cudaFree the memory
 
@@ -453,6 +462,7 @@ public:
     cudaMemset(atmoic_counter, 0, sizeof(int));
   
     printf("args.smChannels.size() = %d\n", (int) args.smChannels.size());
+    printf("args.handles = %p\n", args.handles);
 
     // Initialize the Params structure
     params_ = typename GemmKernel::Params{
@@ -466,6 +476,8 @@ public:
       static_cast<int *>(workspace),
       smChannel_gpu,
       (int) args.smChannels.size(),
+      args.fifo,
+      args.handles,
       args.rank,
       args.kernel_case,
       atmoic_counter,
