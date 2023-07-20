@@ -491,6 +491,11 @@ struct Gemm {
         nextRank++;
       }
     }
+    else if (params.kernel_case == 2)
+    {
+      // overlapcpu, partition by column like overlapgather.cu
+
+    }
     else
     {
       printf("Not implemented kernel_case %d\n", params.kernel_case);
