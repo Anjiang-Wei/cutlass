@@ -461,8 +461,8 @@ public:
     cudaMalloc((void**) &atmoic_counter, sizeof(int));
     cudaMemset(atmoic_counter, 0, sizeof(int));
   
-    printf("args.smChannels.size() = %d\n", (int) args.smChannels.size());
-    printf("args.handles = %p\n", args.handles);
+    // printf("args.smChannels.size() = %d\n", (int) args.smChannels.size());
+    // printf("args.handles = %p\n", args.handles);
 
     // Initialize the Params structure
     params_ = typename GemmKernel::Params{
