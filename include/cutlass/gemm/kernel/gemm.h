@@ -607,7 +607,7 @@ struct Gemm {
             {
               printf("for rank %d, last block params.handles[%d] = %p\n", params.rank, i, (params.handles + i));
               params.handles[i].wait();
-              printf("wait() successfully invoked for rank %d, %d, %d", params.rank, i, (params.handles + i));
+              printf("wait() successfully invoked for rank %d, %d, %d\n", params.rank, i, (params.handles + i));
             }
           }
         }
