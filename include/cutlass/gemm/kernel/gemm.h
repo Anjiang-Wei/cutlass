@@ -506,6 +506,9 @@ struct Gemm {
       for (int rowIndex = startRowIndex;
             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
             rowIndex++) {
+      // for (int rowIndex = startRowIndex;
+      //       rowIndex < startRowIndex + 1 && rowIndex < params.problem_size.m(); 
+      //       rowIndex++) {
         int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
         int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
         if (threadIdx.x == 0)
