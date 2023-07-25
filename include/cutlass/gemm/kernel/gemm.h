@@ -510,7 +510,7 @@ struct Gemm {
         __threadfence();
         int* cur_SM_counter = params.atmoic_counter + 1 + threadblock_tile_offset.m(); // one row per counter
         int old_value = atomicAdd(cur_SM_counter, 1);
-        if (old_value + 1 == gridDim.y)
+        if (old_value + 1 == gridDim.y) // gridDim.y=12
         {
           for (int rowIndex = startRowIndex;
             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
