@@ -167,6 +167,7 @@ struct Gemm {
   union SharedStorage {
     typename Mma::SharedStorage main_loop;
     typename Epilogue::SharedStorage epilogue;
+    char allGatherCache[256*sizeof(half_t)];
   };
 
   //
@@ -409,11 +410,10 @@ struct Gemm {
     
     int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
     int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
-
+     __syncthreads();
 // #define DBEUG_CUDA
 #ifdef DBEUG_CUDA
-    __syncthreads();
-    __threadfence_system();
+   
     if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d %d | gridDim %d %d %d\n", 
       (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, blockDim.y, gridDim.x, gridDim.y, gridDim.z);
     if (threadIdx.x == 0)
@@ -450,27 +450,51 @@ struct Gemm {
     if (params.kernel_case == 0)
     {
       // partition by column - overlapgather.cu
-      int nextRank = params.rank + 1;
-      for (int i = 0; i < params.channel_size; i++)
-      {
-        if (nextRank >= params.channel_size) {
-          nextRank -= params.channel_size;
+      // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
+      const int Alignment = 8;
+      const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / Alignment; // = 32
+      const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+      const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads; 
+      //Works only for Batch Size = 1
+
+      for (int rowIndex = startRowIndex + RowCopyGroupIdx; 
+            rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
+            rowIndex += RowCopyGroup) {
+  
+        int nextRank = params.rank + 1;
+
+        typedef long CacheType;
+
+        CacheType* allGatherCache = (CacheType*)shared_storage.allGatherCache;
+
+        int column_skip = startColIndex; // SM skip + rank skip
+        int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+        const size_t CacheLoadElems = sizeof(CacheType)/sizeof(half);
+        for (auto i = threadIdx.x*CacheLoadElems; i < min(params.problem_size.n(), Mma::Shape::kN); i += blockDim.x*CacheLoadElems) {
+          auto elem = *(CacheType*)(&((half*)params.ref_D.data())[column_skip +  i]);
+          allGatherCache[i/CacheLoadElems] = elem;
+          // if ((blockIdx.y == 0 || blockIdx.y == 1) && elem != CacheType(49152.0)) {
+          //   printf("rank %d blockIdx.x %d blockIdx.y %d i %d column_skip %d row_skip %d  allGatherCache[i] %f params.ref_D.data()=%p\n", params.rank, blockIdx.x, blockIdx.y, i, column_skip, row_skip, (float) elem
+          //                                                       , params.ref_D.data());
+          // }
         }
-        // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
-        const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16; // = 32
-        const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
-        const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
-        for (int rowIndex = startRowIndex + RowCopyGroupIdx; 
-             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
-             rowIndex += RowCopyGroup) {
-          int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+
+        __syncthreads();
+        
+        for (int i = 0; i < params.channel_size; i++) {
+          if (nextRank >= params.channel_size) {
+            nextRank -= params.channel_size;
+          }
           int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
 
-          params.smChannels[nextRank].put(sizeof(cutlass::half_t) * (row_skip + column_skip),
+          params.smChannels[nextRank].putWithSource<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + column_skip),
+                                  (char*)allGatherCache,
                                   min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
                                   threadIdx.x % ColCopyThreads, ColCopyThreads);
+          nextRank++;
         }
-        nextRank++;
+
+        __syncthreads();
       }
     }
     else if (params.kernel_case == 1)
@@ -527,7 +551,7 @@ struct Gemm {
     }
     else
     {
-      printf("Not implemented kernel_case %d\n", params.kernel_case);
+      // printf("Not implemented kernel_case %d\n", params.kernel_case);
       return;
     }
     __syncthreads();
