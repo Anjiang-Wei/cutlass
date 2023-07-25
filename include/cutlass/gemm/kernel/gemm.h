@@ -503,21 +503,25 @@ struct Gemm {
     }
     else if (params.kernel_case == 2)
     {
-      for (int rowIndex = startRowIndex;
+      // blockIdx.x: 0-31; blockIdx.y: 0-3
+      __syncthreads();
+      if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+      {
+        __threadfence();
+        int* cur_SM_counter = params.atmoic_counter + 1 + threadblock_tile_offset.m(); // one row per counter
+        int old_value = atomicAdd(cur_SM_counter, 1);
+        if (old_value + 1 == gridDim.y)
+        {
+          for (int rowIndex = startRowIndex;
             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
             rowIndex++) {
-      // for (int rowIndex = startRowIndex;
-      //       rowIndex < startRowIndex + 1 && rowIndex < params.problem_size.m(); 
-      //       rowIndex++) {
-        int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
-        int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
-        if (threadIdx.x == 0)
-        {
-          mscclpp::ProxyTrigger trigger;
-          trigger.fst = sizeof(cutlass::half_t) * (row_skip + column_skip) + 1; // offset; +1 to ensure that the first > 0
-          trigger.snd = (min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t)); // transmit_size
-          params.fifo.push(trigger);
-          // printf("from rank %d, rowIndex %d, trigger.fst %d, trigger.snd %d\n", params.rank, rowIndex, (int) trigger.fst, (int) trigger.snd);
+              int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
+              int column_skip = 0 + params.rank *  params.problem_size.n(); // SM from 0 + rank skip
+              mscclpp::ProxyTrigger trigger;
+              trigger.fst = sizeof(cutlass::half_t) * (row_skip + column_skip) + 1; // offset; +1 to ensure that the first > 0
+              trigger.snd = (min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t)) * gridDim.y; // transmit_size * SMs per row
+              params.fifo.push(trigger);
+          }
         }
       }
     }
