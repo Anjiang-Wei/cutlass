@@ -306,7 +306,7 @@ class Gemm {
     TensorRef<ElementC, LayoutC> ref_D;
     typename EpilogueOutputOp::Params epilogue;
     int split_k_slices;
-    std::vector<mscclpp::SmChannel> smChannels;
+    std::vector<mscclpp::SmChannel::DeviceHandle> smChannels;
     mscclpp::DeviceProxyFifo fifo;
     mscclpp::Host2DeviceSemaphore::DeviceHandle* handles;
     int rank;
@@ -337,8 +337,8 @@ class Gemm {
       typename EpilogueOutputOp::Params epilogue_ = 
         typename EpilogueOutputOp::Params(),
       int split_k_slices = 1,
-      std::vector<mscclpp::SmChannel>& smChannels_ = std::vector<mscclpp::SmChannel>(),
-      mscclpp::DeviceProxyFifo& fifo_ = mscclpp::DeviceProxyFifo(),
+      std::vector<mscclpp::SmChannel::DeviceHandle> smChannels_ = std::vector<mscclpp::SmChannel::DeviceHandle>(),
+      mscclpp::DeviceProxyFifo fifo_ = mscclpp::DeviceProxyFifo(),
       mscclpp::Host2DeviceSemaphore::DeviceHandle* handles_ = nullptr,
       int rank_ = 0,
       int kernel_case_ = -1,
@@ -450,9 +450,9 @@ public:
       }
     }
 
-    mscclpp::SmChannel* smChannel_gpu;
-    cudaMalloc((void**) &smChannel_gpu, args.smChannels.size() * sizeof(mscclpp::SmChannel));
-    cudaMemcpy(smChannel_gpu, args.smChannels.data(), args.smChannels.size() * sizeof(mscclpp::SmChannel), cudaMemcpyHostToDevice);
+    mscclpp::SmChannel::DeviceHandle* smChannel_gpu;
+    cudaMalloc((void**) &smChannel_gpu, args.smChannels.size() * sizeof(mscclpp::SmChannel::DeviceHandle));
+    cudaMemcpy(smChannel_gpu, args.smChannels.data(), args.smChannels.size() * sizeof(mscclpp::SmChannel::DeviceHandle), cudaMemcpyHostToDevice);
     
 
     // todo: find a place to cudaFree the memory

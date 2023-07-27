@@ -90,7 +90,7 @@ struct Gemm {
     int *semaphore;
     int gemm_k_size;
     // For gather+scatter operations
-    mscclpp::SmChannel* smChannels;
+    mscclpp::SmChannel::DeviceHandle* smChannels;
     int channel_size;
     mscclpp::DeviceProxyFifo fifo;
     mscclpp::Host2DeviceSemaphore::DeviceHandle* handles;
@@ -118,7 +118,7 @@ struct Gemm {
       typename Epilogue::OutputTileIterator::TensorRef ref_D,
       typename OutputOp::Params output_op = typename OutputOp::Params(),
       int *workspace = nullptr,
-      mscclpp::SmChannel* smChannels_ = nullptr,
+      mscclpp::SmChannel::DeviceHandle* smChannels_ = nullptr,
       int channel_size_ = 0,
       mscclpp::DeviceProxyFifo fifo_ = mscclpp::DeviceProxyFifo(),
       mscclpp::Host2DeviceSemaphore::DeviceHandle* handles_ = nullptr,
@@ -487,10 +487,10 @@ struct Gemm {
           }
           int column_skip = startColIndex + params.rank *  params.problem_size.n(); // SM skip + rank skip
 
-          params.smChannels[nextRank].putWithSource<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + column_skip),
-                                  (char*)allGatherCache,
-                                  min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
-                                  threadIdx.x % ColCopyThreads, ColCopyThreads);
+          // params.smChannels[nextRank].putWithSource<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + column_skip),
+          //                         (char*)allGatherCache,
+          //                         min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+          //                         threadIdx.x % ColCopyThreads, ColCopyThreads);
           nextRank++;
         }
 
