@@ -527,34 +527,24 @@ struct Gemm {
     }
     else if (params.kernel_case == 2)
     {
-      // blockIdx.x: 0-31; blockIdx.y: 0-3
-      __syncthreads();
       if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
       {
+        int rowTilesPerTrigger = 16;
+        int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
         __threadfence();
-        int* cur_SM_counter = params.atmoic_counter + 1 + threadblock_tile_offset.m(); // one row per counter
-        // printf("threadblock_tile_offset.m() = %d\n", threadblock_tile_offset.m());
+        // rowTilesPerTrigger tiles per counter
+        int* cur_SM_counter = params.atmoic_counter + 1 + threadblock_tile_offset.m() / rowTilesPerTrigger;
         int old_value = atomicAdd(cur_SM_counter, 1);
-        if (old_value + 1 == gridDim.y) // gridDim.y=12
+        if (old_value + 1 == params.grid_tiled_shape.n() * rowTilesPerTrigger) // gridDim.y
         {
-          // for (int rowIndex = startRowIndex;
-          //   rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
-          //   rowIndex++) {
-          //     int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
-          //     int column_skip = 0 + params.rank *  params.problem_size.n(); // SM from 0 + rank skip
-          //     mscclpp::ProxyTrigger trigger;
-          //     trigger.fst = sizeof(cutlass::half_t) * (row_skip + column_skip) + 1; // offset; +1 to ensure that the first > 0
-          //     trigger.snd = (min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t)) * gridDim.y; // transmit_size * SMs per row
-          //     params.fifo.push(trigger);
-          // }
-          // printf("gridDim.y %d\n", gridDim.y);
+          int startRowIndex = (threadblock_tile_offset.m() / rowTilesPerTrigger) * rowTilesPerTrigger * Mma::Shape::kM;
           mscclpp::ProxyTrigger trigger;
           *cur_SM_counter = 0;
-          uint64_t row_end = (uint64_t) min(startRowIndex + Mma::Shape::kM, params.problem_size.m());
+          uint64_t row_end = (uint64_t) min(startRowIndex + Mma::Shape::kM*rowTilesPerTrigger, params.problem_size.m());
           trigger.fst = (startRowIndex << 16) + (row_end);
-          // printf("startRowIndex = %d, Mma::Shape::kM = %d, row_end = %d, trigger.fst = %d\n",
+          // printf("startRowIndex = %d, Mma::Shape::kM = %d, row_end = %d, trigger.fst = %ld\n",
           //         startRowIndex, Mma::Shape::kM, row_end, trigger.fst);
-          trigger.snd = (min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t)) * gridDim.y; // transmit_size * SMs per row
+          trigger.snd = params.problem_size.n() * sizeof(cutlass::half_t); // size of a row
           params.fifo.push(trigger);
         }
       }
