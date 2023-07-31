@@ -533,8 +533,9 @@ struct Gemm {
       {
         __threadfence();
         int* cur_SM_counter = params.atmoic_counter + 1 + threadblock_tile_offset.m(); // one row per counter
+        // printf("threadblock_tile_offset.m() = %d\n", threadblock_tile_offset.m());
         int old_value = atomicAdd(cur_SM_counter, 1);
-        if (old_value + 1 == gridDim.y/*gridDim.x*16*/) // gridDim.y=12
+        if (old_value + 1 == gridDim.y) // gridDim.y=12
         {
           // for (int rowIndex = startRowIndex;
           //   rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
@@ -546,6 +547,7 @@ struct Gemm {
           //     trigger.snd = (min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t)) * gridDim.y; // transmit_size * SMs per row
           //     params.fifo.push(trigger);
           // }
+          // printf("gridDim.y %d\n", gridDim.y);
           mscclpp::ProxyTrigger trigger;
           *cur_SM_counter = 0;
           uint64_t row_end = (uint64_t) min(startRowIndex + Mma::Shape::kM, params.problem_size.m());
