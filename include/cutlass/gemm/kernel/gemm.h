@@ -414,8 +414,8 @@ struct Gemm {
 // #define DBEUG_CUDA
 #ifdef DBEUG_CUDA
    
-    if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d %d | gridDim %d %d %d\n", 
-      (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, blockDim.y, gridDim.x, gridDim.y, gridDim.z);
+    if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d %d %d | gridDim %d %d %d\n", 
+      (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z);
     if (threadIdx.x == 0)
     {
       printf("DEBUG startColIndex = %d\n", startColIndex);
@@ -529,7 +529,7 @@ struct Gemm {
     {
       if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
       {
-        int rowTilesPerTrigger = 16;
+        int rowTilesPerTrigger = 18;
         int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
         __threadfence();
         // rowTilesPerTrigger tiles per counter
