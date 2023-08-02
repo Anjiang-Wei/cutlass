@@ -491,6 +491,10 @@ struct Gemm {
           //                         (char*)allGatherCache,
           //                         min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
           //                         threadIdx.x % ColCopyThreads, ColCopyThreads);
+          params.smChannels[nextRank].put<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + column_skip),
+                        // (char*)allGatherCache,
+                        min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+                        threadIdx.x % ColCopyThreads, ColCopyThreads);
           nextRank++;
         }
 
@@ -529,7 +533,7 @@ struct Gemm {
     {
       if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
       {
-        int rowTilesPerTrigger = 18;
+        int rowTilesPerTrigger = 8;
         int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
         __threadfence();
         // rowTilesPerTrigger tiles per counter
