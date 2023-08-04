@@ -167,7 +167,7 @@ struct Gemm {
   union SharedStorage {
     typename Mma::SharedStorage main_loop;
     typename Epilogue::SharedStorage epilogue;
-    char allGatherCache[256*sizeof(half_t)];
+    half_t allGatherCache[Mma::Shape::kN * (128/(Mma::Shape::kN*sizeof(half)/sizeof(long)))];
   };
 
   //
@@ -402,12 +402,11 @@ struct Gemm {
 
       semaphore.release(lock);
     }
-    // if (!(kSplitKSerial && params.grid_tiled_shape.k() > 1 && params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1))
-      // return;
-    // return;
     if (params.channel_size == 0)
       return;
-    
+    // __syncthreads();
+    if (kSplitKSerial && params.grid_tiled_shape.k() > 1 && (params.grid_tiled_shape.k() != threadblock_tile_offset.k() + 1))
+      return;
     int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
     int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
      __syncthreads();
@@ -451,7 +450,7 @@ struct Gemm {
     {
       // partition by column - overlapgather.cu
       // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
-      const int Alignment = 8;
+      const int Alignment = 16;
       const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / Alignment; // = 32
       const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
       const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads; 
@@ -462,24 +461,25 @@ struct Gemm {
             rowIndex += RowCopyGroup) {
   
         int nextRank = params.rank + 1;
-
-        typedef long CacheType;
-
-        CacheType* allGatherCache = (CacheType*)shared_storage.allGatherCache;
-
-        int column_skip = startColIndex; // SM skip + rank skip
         int row_skip = rowIndex * params.problem_size.n() * (params.channel_size+1); // whole row skip, partition by column w.r.t rank
-        const size_t CacheLoadElems = sizeof(CacheType)/sizeof(half);
-        for (auto i = threadIdx.x*CacheLoadElems; i < min(params.problem_size.n(), Mma::Shape::kN); i += blockDim.x*CacheLoadElems) {
-          auto elem = *(CacheType*)(&((half*)params.ref_D.data())[column_skip +  i]);
-          allGatherCache[i/CacheLoadElems] = elem;
-          // if ((blockIdx.y == 0 || blockIdx.y == 1) && elem != CacheType(49152.0)) {
-          //   printf("rank %d blockIdx.x %d blockIdx.y %d i %d column_skip %d row_skip %d  allGatherCache[i] %f params.ref_D.data()=%p\n", params.rank, blockIdx.x, blockIdx.y, i, column_skip, row_skip, (float) elem
-          //                                                       , params.ref_D.data());
-          // }
-        }
 
-        __syncthreads();
+        // struct __attribute__((__packed__)) half4 {half x; half y; half z; half a;};
+        // typedef half4 CacheType;
+
+        // CacheType* allGatherCache = (CacheType*)shared_storage.allGatherCache;
+
+        // int column_skip = startColIndex; // SM skip + rank skip
+        // const size_t CacheLoadElems = sizeof(CacheType)/sizeof(half);
+        // for (auto i = threadIdx.x*CacheLoadElems; i < min(params.problem_size.n(), Mma::Shape::kN); i += blockDim.x*CacheLoadElems) {
+        //   half4 elem = {half(49152.), half(49152.), half(49152.), half(49152.)}; //*(CacheType*)(&((half*)params.ref_D.data())[column_skip +  i]);
+        //   allGatherCache[i/CacheLoadElems] = elem;
+        //   // if ((blockIdx.y == 0 || blockIdx.y == 1) && elem != CacheType(49152.0)) {
+        //   //   printf("rank %d blockIdx.x %d blockIdx.y %d i %d column_skip %d row_skip %d  allGatherCache[i] %f params.ref_D.data()=%p\n", params.rank, blockIdx.x, blockIdx.y, i, column_skip, row_skip, (float) elem
+        //   //                                                       , params.ref_D.data());
+        //   // }
+        // }
+
+        // __syncthreads();
         
         for (int i = 0; i < params.channel_size; i++) {
           if (nextRank >= params.channel_size) {
@@ -498,7 +498,7 @@ struct Gemm {
           nextRank++;
         }
 
-        __syncthreads();
+        // __syncthreads();
       }
     }
     else if (params.kernel_case == 1)
@@ -535,7 +535,7 @@ struct Gemm {
       {
         int rowTilesPerTrigger = 8;
         int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
-        __threadfence();
+        __threadfence_system();
         // rowTilesPerTrigger tiles per counter
         int* cur_SM_counter = params.atmoic_counter + 1 + threadblock_tile_offset.m() / rowTilesPerTrigger;
         int old_value = atomicAdd(cur_SM_counter, 1);
@@ -564,9 +564,9 @@ struct Gemm {
     {
       __threadfence();
       int old_value = atomicAdd(params.atmoic_counter, 1);
-      if (old_value + 1 == gridDim.x * gridDim.y * gridDim.z)
+      if (old_value + 1 == gridDim.x * gridDim.y)
       {
-        // printf("before signal %d, rank %d\n", *params.atmoic_counter, params.rank);
+        // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
         *params.atmoic_counter = 0;
         lastBlock = true;
       }
@@ -626,7 +626,7 @@ struct Gemm {
       }
       else
       {
-        printf("Not implemented kernel_case %d\n", params.kernel_case);
+        // printf("Not implemented kernel_case %d\n", params.kernel_case);
         return;
       }
     }
