@@ -286,7 +286,7 @@ struct Gemm {
         int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
 
         __shared__ bool firstBlock;
-        __shared__ int preval;
+        int preval;
         int* ready = params.atmoic_counter + 1 + offset_m;
         volatile int* done = params.atmoic_counter;
         if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
@@ -306,6 +306,10 @@ struct Gemm {
         {
           // blockDim.x, blockDim.y, blockDim.z = 128, 1, 1
           // gridDim.x gridDim.y gridDim.z = 48, 16, 1
+          // if (threadIdx.x == 0)
+          // {
+          //   printf("transfer from %d to %d by blockIdx.x %d\n", startRowIndex, startRowIndex + num_rows, blockIdx.x);
+          // }
           int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
           params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
               params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
