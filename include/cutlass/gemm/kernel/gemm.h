@@ -285,86 +285,38 @@ struct Gemm {
         int row_skip = startRowIndex * params.problem_size.k();
         int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
 
-        // for (int rowIndex = startRowIndex; 
-        //       rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
-        //       rowIndex += 1) {
-    
-        //   int row_skip = rowIndex * params.problem_size.k();
-        //   int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
-
-          // int column_skip = startColIndex;
-          // if (threadIdx.x == 0)
-          // {
-          //   printf("row_skip %d, column_skip %d, tile_owner %d, rank %d, threadblock_tile_offset.m() %d, threadblock_tile_offset.k() %d, threadblock_tile_offset.n() %d, params.channel_size+1 %d\n",
-          //           row_skip, column_skip, tile_owner, (int) params.rank, (int) threadblock_tile_offset.m(), (int) threadblock_tile_offset.k(), threadblock_tile_offset.n(), params.channel_size+1);
-          // }
-          // if (threadIdx.x == 0) 
-          // {
-          //   // params.problem_size.k() = 12288, Mma::Shape::kK = 32
-          //   // printf("params.problem_size.k() = %d, Mma::Shape::kK = %d\n", (int) params.problem_size.k(), (int) Mma::Shape::kK);
-          //   //  threadblock_tile_offset.k() always 0
-          //   printf("threadblock_tile_offset.m() %d  threadblock_tile_offset.k() %d\n", threadblock_tile_offset.m(), threadblock_tile_offset.k());
-          // }
-          // __syncthreads();
-          // if (params.rank == 0 && threadIdx.x == 0)
-          // {
-          //   printf("blockIdx.x %d blockIdx.y %d blockIdx.z %d row_skip %d\n", blockIdx.x, blockIdx.y, blockIdx.z, row_skip);
-          // }
-          // volatile int* ready = params.atmoic_counter + 1 + offset_m;
-          // __shared__ bool first_SM;
-          // // int atomicCAS(int* address, int compare, int val);
-          // // computes (old == compare ? val : old); return old
-          // if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-          // {
-          //   first_SM = false;
-          //   if (atomicCAS((int*)ready, 0, 1) == 0)
-          //   {
-          //     first_SM = true;
-          //   }
-          //   else
-          //   {
-          //     while (atomicCAS((int*)ready, 2, 3) != 2)
-          //     {
-
-          //     }
-          //   }
-          // }
-          // __syncthreads();
-          // if (first_SM)
-          // {
-          //   int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
-          //     params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
-          //       params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
-          //       threadIdx.x % ColCopyThreads, ColCopyThreads);  
-          //   if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-          //   {
-          //     atomicCAS((int*)ready, 1, 2);
-          //   }
-          // }
-          // __syncthreads();
-          if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+        __shared__ bool firstBlock;
+        __shared__ int preval;
+        int* ready = params.atmoic_counter + 1 + offset_m;
+        volatile int* done = params.atmoic_counter;
+        if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+        {
+          preval = atomicAdd(ready, 1);
+          if (preval == 0)
           {
-            int* ready = params.atmoic_counter + 1 + offset_m;
-            volatile int* done = params.atmoic_counter;
-            int preval = atomicAdd(ready, 1);
-            if (preval == 0)
-            {
-              int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
-              params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
-                  params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
-                  0, 1);
-              *done = 1;  // done has to be volatile
-            }
-            while (*done == 0) {}
-            if (preval == gridDim.x - 1)
-            {
-              *ready = 0;
-              *done = 0;
-            }
+            firstBlock = true;
           }
-          __syncthreads();
-
-        // }
+          else
+          {
+            firstBlock = false;
+          }
+        }
+        __syncthreads();
+        if (firstBlock)
+        {
+          int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
+          params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
+              params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
+              threadIdx.x % ColCopyThreads, ColCopyThreads);
+          *done = 1;  // done has to be volatile
+        }
+        while (*done == 0) {}
+        if (preval == gridDim.x - 1)
+        {
+          *ready = 0;
+          *done = 0;
+        }
+        __syncthreads();
       }
       
     }
