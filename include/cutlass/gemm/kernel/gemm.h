@@ -227,6 +227,11 @@ struct Gemm {
     return Status::kSuccess;
   }
 
+  CUTLASS_DEVICE
+  int get_tile_owner(int m, int k, int nranks){
+    return (m % nranks);
+  }
+
   /// Executes one GEMM
   CUTLASS_DEVICE
   void operator()(Params &params, SharedStorage &shared_storage) {
@@ -263,6 +268,88 @@ struct Gemm {
     // Compute threadblock-scoped matrix multiply-add
     int gemm_k_iterations = (problem_size_k - tb_offset_A.column() + Mma::Shape::kK - 1) / Mma::Shape::kK;
 
+    if (params.kernel_case == 3 && params.channel_size > 0) {
+      // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
+      const int Alignment = 16;
+      const int ColCopyThreads = Mma::Shape::kK * sizeof(half) / Alignment; // = 32
+      const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+      const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads; 
+      int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+      int startColIndex = threadblock_tile_offset.k() * Mma::Shape::kK;
+
+      int offset_m = (int) threadblock_tile_offset.m();
+      
+      int tile_owner = get_tile_owner(offset_m, (int) threadblock_tile_offset.k(), params.channel_size+1);
+      
+      if (tile_owner != params.rank) {
+        int row_skip = startRowIndex * params.problem_size.k();
+        int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+
+        // for (int rowIndex = startRowIndex; 
+        //       rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); 
+        //       rowIndex += 1) {
+    
+        //   int row_skip = rowIndex * params.problem_size.k();
+        //   int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+
+          // int column_skip = startColIndex;
+          // if (threadIdx.x == 0)
+          // {
+          //   printf("row_skip %d, column_skip %d, tile_owner %d, rank %d, threadblock_tile_offset.m() %d, threadblock_tile_offset.k() %d, threadblock_tile_offset.n() %d, params.channel_size+1 %d\n",
+          //           row_skip, column_skip, tile_owner, (int) params.rank, (int) threadblock_tile_offset.m(), (int) threadblock_tile_offset.k(), threadblock_tile_offset.n(), params.channel_size+1);
+          // }
+          // if (threadIdx.x == 0) 
+          // {
+          //   // params.problem_size.k() = 12288, Mma::Shape::kK = 32
+          //   // printf("params.problem_size.k() = %d, Mma::Shape::kK = %d\n", (int) params.problem_size.k(), (int) Mma::Shape::kK);
+          //   //  threadblock_tile_offset.k() always 0
+          //   printf("threadblock_tile_offset.m() %d  threadblock_tile_offset.k() %d\n", threadblock_tile_offset.m(), threadblock_tile_offset.k());
+          // }
+          // __syncthreads();
+          // if (params.rank == 0 && threadIdx.x == 0)
+          // {
+          //   printf("blockIdx.x %d blockIdx.y %d blockIdx.z %d row_skip %d\n", blockIdx.x, blockIdx.y, blockIdx.z, row_skip);
+          // }
+          int* ready = params.atmoic_counter + 1 + offset_m;
+          __shared__ bool first_SM;
+          // int atomicCAS(int* address, int compare, int val);
+          // computes (old == compare ? val : old); return old
+          if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+          {
+            first_SM = false;
+            if (atomicCAS(ready, 0, 1) == 0)
+            {
+              first_SM = true;
+            }
+            else
+            {
+              while (atomicCAS(ready, 2, 3) != 2)
+              {
+
+              }
+            }
+          }
+          __syncthreads();
+          if (first_SM)
+          {
+            int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
+              params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
+                params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
+                threadIdx.x % ColCopyThreads, ColCopyThreads);  
+            if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+            {
+              atomicCAS(ready, 1, 2);
+            }
+          }
+          __syncthreads();
+
+        // }
+      }
+      
+    }
+
+
+
     // Compute position within threadblock
     int thread_idx = threadIdx.x;
 
@@ -281,7 +368,8 @@ struct Gemm {
       {problem_size_k, params.problem_size.n()},
       thread_idx,
       tb_offset_B,
-      params.gather_B_indices);
+      params.gather_B_indices)
+      ;
 
     // Broadcast the warp_id computed by lane 0 to ensure dependent code
     // is compiled as warp-uniform.
@@ -552,6 +640,10 @@ struct Gemm {
           params.fifo.push(trigger);
         }
       }
+    }
+    else if (params.kernel_case == 3)
+    {
+      // TO BE IMPLEMENTED.
     }
     else
     {
