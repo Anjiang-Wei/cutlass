@@ -342,23 +342,27 @@ struct Gemm {
           //   }
           // }
           // __syncthreads();
-          int* ready = params.atmoic_counter + 1 + offset_m;
-          volatile int* done = params.atmoic_counter;
-          int preval = atomicAdd(ready, 1);
-          if (preval == 0)
+          if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
           {
-            int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
-            params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
-                params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
-                threadIdx.x % ColCopyThreads, ColCopyThreads);  
-            *done = 1;  // done has to be volatile
+            int* ready = params.atmoic_counter + 1 + offset_m;
+            volatile int* done = params.atmoic_counter;
+            int preval = atomicAdd(ready, 1);
+            if (preval == 0)
+            {
+              int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
+              params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
+                  params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
+                  0, 1);
+              *done = 1;  // done has to be volatile
+            }
+            while (*done == 0) {}
+            if (preval == gridDim.x - 1)
+            {
+              *ready = 0;
+              *done = 0;
+            }
           }
-          while (*done == 0) {}
-          if (preval == gridDim.x - 1)
-          {
-            *ready = 0;
-            *done = 0;
-          }
+          __syncthreads();
 
         // }
       }
