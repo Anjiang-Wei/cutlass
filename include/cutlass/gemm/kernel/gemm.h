@@ -304,13 +304,16 @@ struct Gemm {
         __syncthreads();
         if (firstBlock)
         {
+          // blockDim.x, blockDim.y, blockDim.z = 128, 1, 1
+          // gridDim.x gridDim.y gridDim.z = 48, 16, 1
           int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
           params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
               params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
-              threadIdx.x % ColCopyThreads, ColCopyThreads);
+              threadIdx.x, blockDim.x);
           *done = 1;  // done has to be volatile
         }
         while (*done == 0) {}
+        // gridDim.x gridDim.y gridDim.z
         if (preval == gridDim.x - 1)
         {
           *ready = 0;
