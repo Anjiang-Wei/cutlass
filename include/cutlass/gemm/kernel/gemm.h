@@ -310,46 +310,60 @@ struct Gemm {
           // {
           //   printf("blockIdx.x %d blockIdx.y %d blockIdx.z %d row_skip %d\n", blockIdx.x, blockIdx.y, blockIdx.z, row_skip);
           // }
-          int* ready = params.atmoic_counter + 1 + offset_m;
-          __shared__ bool first_SM;
-          // int atomicCAS(int* address, int compare, int val);
-          // computes (old == compare ? val : old); return old
-          if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-          {
-            first_SM = false;
-            if (atomicCAS(ready, 0, 1) == 0)
-            {
-              first_SM = true;
-            }
-            else
-            {
-              while (atomicCAS(ready, 2, 3) != 2)
-              {
+          // volatile int* ready = params.atmoic_counter + 1 + offset_m;
+          // __shared__ bool first_SM;
+          // // int atomicCAS(int* address, int compare, int val);
+          // // computes (old == compare ? val : old); return old
+          // if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+          // {
+          //   first_SM = false;
+          //   if (atomicCAS((int*)ready, 0, 1) == 0)
+          //   {
+          //     first_SM = true;
+          //   }
+          //   else
+          //   {
+          //     while (atomicCAS((int*)ready, 2, 3) != 2)
+          //     {
 
-              }
-            }
-          }
-          __syncthreads();
-          if (first_SM)
+          //     }
+          //   }
+          // }
+          // __syncthreads();
+          // if (first_SM)
+          // {
+          //   int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
+          //     params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
+          //       params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
+          //       threadIdx.x % ColCopyThreads, ColCopyThreads);  
+          //   if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+          //   {
+          //     atomicCAS((int*)ready, 1, 2);
+          //   }
+          // }
+          // __syncthreads();
+          int* ready = params.atmoic_counter + 1 + offset_m;
+          volatile int* done = params.atmoic_counter;
+          int preval = atomicAdd(ready, 1);
+          if (preval == 0)
           {
             int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
-              params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
+            params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
                 params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
                 threadIdx.x % ColCopyThreads, ColCopyThreads);  
-            if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-            {
-              atomicCAS(ready, 1, 2);
-            }
+            *done = 1;  // done has to be volatile
           }
-          __syncthreads();
+          while (*done == 0) {}
+          if (preval == gridDim.x - 1)
+          {
+            *ready = 0;
+            *done = 0;
+          }
 
         // }
       }
       
     }
-
-
-
     // Compute position within threadblock
     int thread_idx = threadIdx.x;
 
