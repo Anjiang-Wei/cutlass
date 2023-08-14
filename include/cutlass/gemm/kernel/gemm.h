@@ -269,11 +269,7 @@ struct Gemm {
     int gemm_k_iterations = (problem_size_k - tb_offset_A.column() + Mma::Shape::kK - 1) / Mma::Shape::kK;
 
     if (params.kernel_case == 3 && params.channel_size > 0) {
-      // 512 bytes together; 16 bytes (2 longs) in one instruction per thread;
       const int Alignment = 16;
-      const int ColCopyThreads = Mma::Shape::kK * sizeof(half) / Alignment; // = 32
-      const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
-      const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads; 
       int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
       int startColIndex = threadblock_tile_offset.k() * Mma::Shape::kK;
 
@@ -300,8 +296,6 @@ struct Gemm {
           {
             firstBlock = false;
           }
-          if (params.rank == 0)
-          printf("offset_m %d tile_owner %d blockIdx %d,%d,%d, incremented to %d\n", offset_m, tile_owner, blockIdx.x, blockIdx.y, blockIdx.z, preval+1);
         }
         __syncthreads();
         if (firstBlock)
@@ -316,17 +310,8 @@ struct Gemm {
         }
         __threadfence_system();
         while (*done == 0) {}
-        // if (preval == gridDim.x - 1)
-        // {
-        //   *ready = 0;
-        //   *done = 0;
-        //   if (params.rank == 0)
-        //   printf("offset_m %d tile_owner %d blockIdx %d,%d,%d, decrement to 0 from %d\n", offset_m, tile_owner, blockIdx.x, blockIdx.y, blockIdx.z, preval+1);
-        // }
-        __threadfence_system();
         __syncthreads();
       }
-      
     }
     // Compute position within threadblock
     int thread_idx = threadIdx.x;
@@ -702,22 +687,11 @@ struct Gemm {
       {
         int offset_m = (int) threadblock_tile_offset.m();
         int tile_owner = get_tile_owner(offset_m, (int) threadblock_tile_offset.k(), params.channel_size+1);
-        
-        if (tile_owner != params.rank) {
-          int row_skip = startRowIndex * params.problem_size.k();
-          int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+        int* ready = params.atmoic_counter + 1 + threadIdx.x;
+        volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
 
-          __shared__ bool firstBlock;
-          int preval;
-          int* ready = params.atmoic_counter + 1 + threadIdx.x;
-          volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
-
-          *ready = 0;
-          *done = 0;
-          if (params.rank == 0)
-          printf("the last block is setting back to 0\n");
-        }
-        __syncthreads();
+        *ready = 0;
+        *done = 0;
       }
       else
       {
