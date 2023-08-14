@@ -685,11 +685,9 @@ struct Gemm {
       }
       else if (params.kernel_case == 3)
       {
-        int offset_m = (int) threadblock_tile_offset.m();
-        int tile_owner = get_tile_owner(offset_m, (int) threadblock_tile_offset.k(), params.channel_size+1);
         int* ready = params.atmoic_counter + 1 + threadIdx.x;
         volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
-
+        // set it back to 0
         *ready = 0;
         *done = 0;
       }
