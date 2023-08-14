@@ -288,7 +288,7 @@ struct Gemm {
         __shared__ bool firstBlock;
         int preval;
         int* ready = params.atmoic_counter + 1 + offset_m;
-        volatile int* done = params.atmoic_counter;
+        volatile int* done = params.atmoic_counter + 2048 + offset_m;
         if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
         {
           preval = atomicAdd(ready, 1);
@@ -306,17 +306,26 @@ struct Gemm {
         {
           // blockDim.x, blockDim.y, blockDim.z = 128, 1, 1
           // gridDim.x gridDim.y gridDim.z = 48, 16, 1
-          // if (threadIdx.x == 0)
-          // {
-          //   printf("transfer from %d to %d by blockIdx.x %d\n", startRowIndex, startRowIndex + num_rows, blockIdx.x);
-          // }
+          if (threadIdx.x == 0)
+          {
+            printf("transfer from %d to %d by blockIdx.x %d\n", startRowIndex, startRowIndex + num_rows, blockIdx.x);
+          }
           int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
           params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
               params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
               threadIdx.x, blockDim.x);
           *done = 1;  // done has to be volatile
         }
+        __threadfence_system();
+        if (threadIdx.x == 0)
+        {
+          printf("blockIdx.x %d before while loop\n", blockIdx.x);
+        }
         while (*done == 0) {}
+        if (threadIdx.x == 0)
+        {
+          printf("blockIdx.x %d after while loop\n", blockIdx.x);
+        }
         // gridDim.x gridDim.y gridDim.z
         if (preval == gridDim.x - 1)
         {
