@@ -288,7 +288,7 @@ struct Gemm {
         __shared__ bool firstBlock;
         int preval;
         int* ready = params.atmoic_counter + 1 + offset_m;
-        volatile int* done = params.atmoic_counter + 2048 + offset_m;
+        volatile int* done = params.atmoic_counter + 1024 + offset_m;
         if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
         {
           preval = atomicAdd(ready, 1);
@@ -300,16 +300,14 @@ struct Gemm {
           {
             firstBlock = false;
           }
+          if (params.rank == 0)
+          printf("offset_m %d tile_owner %d blockIdx %d,%d,%d, incremented to %d\n", offset_m, tile_owner, blockIdx.x, blockIdx.y, blockIdx.z, preval+1);
         }
         __syncthreads();
         if (firstBlock)
         {
           // blockDim.x, blockDim.y, blockDim.z = 128, 1, 1
           // gridDim.x gridDim.y gridDim.z = 48, 16, 1
-          if (threadIdx.x == 0)
-          {
-            printf("transfer from %d to %d by blockIdx.x %d\n", startRowIndex, startRowIndex + num_rows, blockIdx.x);
-          }
           int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
           params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
               params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
@@ -317,21 +315,15 @@ struct Gemm {
           *done = 1;  // done has to be volatile
         }
         __threadfence_system();
-        if (threadIdx.x == 0)
-        {
-          printf("blockIdx.x %d before while loop\n", blockIdx.x);
-        }
         while (*done == 0) {}
-        if (threadIdx.x == 0)
-        {
-          printf("blockIdx.x %d after while loop\n", blockIdx.x);
-        }
-        // gridDim.x gridDim.y gridDim.z
-        if (preval == gridDim.x - 1)
-        {
-          *ready = 0;
-          *done = 0;
-        }
+        // if (preval == gridDim.x - 1)
+        // {
+        //   *ready = 0;
+        //   *done = 0;
+        //   if (params.rank == 0)
+        //   printf("offset_m %d tile_owner %d blockIdx %d,%d,%d, decrement to 0 from %d\n", offset_m, tile_owner, blockIdx.x, blockIdx.y, blockIdx.z, preval+1);
+        // }
+        __threadfence_system();
         __syncthreads();
       }
       
@@ -637,7 +629,7 @@ struct Gemm {
       return;
     }
     __syncthreads();
-    bool lastBlock = false;
+    __shared__ bool lastBlock;
     if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
     {
       __threadfence();
@@ -647,6 +639,10 @@ struct Gemm {
         // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
         *params.atmoic_counter = 0;
         lastBlock = true;
+      }
+      else
+      {
+        lastBlock = false;
       }
     }
     if (lastBlock) {
@@ -701,6 +697,27 @@ struct Gemm {
             }
           }
         }
+      }
+      else if (params.kernel_case == 3)
+      {
+        int offset_m = (int) threadblock_tile_offset.m();
+        int tile_owner = get_tile_owner(offset_m, (int) threadblock_tile_offset.k(), params.channel_size+1);
+        
+        if (tile_owner != params.rank) {
+          int row_skip = startRowIndex * params.problem_size.k();
+          int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+
+          __shared__ bool firstBlock;
+          int preval;
+          int* ready = params.atmoic_counter + 1 + threadIdx.x;
+          volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
+
+          *ready = 0;
+          *done = 0;
+          if (params.rank == 0)
+          printf("the last block is setting back to 0\n");
+        }
+        __syncthreads();
       }
       else
       {
