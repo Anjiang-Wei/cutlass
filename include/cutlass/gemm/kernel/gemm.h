@@ -268,6 +268,8 @@ struct Gemm {
     // Compute threadblock-scoped matrix multiply-add
     int gemm_k_iterations = (problem_size_k - tb_offset_A.column() + Mma::Shape::kK - 1) / Mma::Shape::kK;
 
+#define parallel_loader 16
+
     if (params.kernel_case == 3 && params.channel_size > 0) {
       const int Alignment = 16;
       int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
@@ -281,35 +283,28 @@ struct Gemm {
         int row_skip = startRowIndex * params.problem_size.k();
         int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
 
-        __shared__ bool firstBlock;
+        __shared__ int subBlockId;
         int preval;
         int* ready = params.atmoic_counter + 1 + offset_m;
         volatile int* done = params.atmoic_counter + 1024 + offset_m;
         if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
         {
           preval = atomicAdd(ready, 1);
-          if (preval == 0)
-          {
-            firstBlock = true;
-          }
-          else
-          {
-            firstBlock = false;
-          }
+          subBlockId = preval;
         }
         __syncthreads();
-        if (firstBlock)
+        if (subBlockId < parallel_loader)
         {
           // blockDim.x, blockDim.y, blockDim.z = 128, 1, 1
           // gridDim.x gridDim.y gridDim.z = 48, 16, 1
           int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
-          params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * row_skip,
-              params.problem_size.k() * sizeof(cutlass::half_t) * num_rows,
+          params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + subBlockId * num_rows/parallel_loader * params.problem_size.k()),
+              params.problem_size.k() * sizeof(cutlass::half_t) * num_rows / parallel_loader,
               threadIdx.x, blockDim.x);
-          *done = 1;  // done has to be volatile
+          atomicAdd((int*)done, 1);
         }
         __threadfence_system();
-        while (*done == 0) {}
+        while (*done == parallel_loader) {}
         __syncthreads();
       }
     }
