@@ -287,6 +287,7 @@ struct Gemm {
         int preval;
         int* ready = params.atmoic_counter + 1 + offset_m;
         volatile int* done = params.atmoic_counter + 1024 + offset_m;
+        volatile int* done2 = params.atmoic_counter + 2048 + offset_m;
         if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
         {
           preval = atomicAdd(ready, 1);
@@ -301,10 +302,14 @@ struct Gemm {
           params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + subBlockId * num_rows/parallel_loader * params.problem_size.k()),
               params.problem_size.k() * sizeof(cutlass::half_t) * num_rows / parallel_loader,
               threadIdx.x, blockDim.x);
-          atomicAdd((int*)done, 1);
+          __syncthreads();
+          if (threadIdx.x == 0){
+            // __threadfence();
+            atomicAdd((int*)done2, 1);
+          }
         }
-        __threadfence_system();
-        while (*done == parallel_loader) {}
+        // __threadfence_system();
+        while (*done2 < parallel_loader) {}
         __syncthreads();
       }
     }
@@ -682,9 +687,11 @@ struct Gemm {
       {
         int* ready = params.atmoic_counter + 1 + threadIdx.x;
         volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
+        volatile int* done2 = params.atmoic_counter + 2048 + threadIdx.x;
         // set it back to 0
         *ready = 0;
         *done = 0;
+        *done2 = 0;
       }
       else
       {
