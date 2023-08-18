@@ -608,6 +608,28 @@ struct Gemm {
     {
       // TO BE IMPLEMENTED.
     }
+    else if (params.kernel_case == 4)
+    {
+      int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+      int nextRank = params.rank + 1;
+      int target_rank = params.rank + 1;
+      int row_skip = startRowIndex * params.problem_size.n();
+      int column_skip = startColIndex;
+      int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.n());
+      for (int i = 0; i < params.channel_size; i++) {
+        if (nextRank >= params.channel_size) {
+          nextRank -= params.channel_size;
+        }
+        int dest_offset = src_offset + target_rank * (params.problem_size.m() * params.problem_size.n());
+        params.smChannels[nextRank].put(
+                      sizeof(cutlass::half_t) * dest_offset,
+                      sizeof(cutlass::half_t) * src_offset,
+                      min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+                      threadIdx.x % 16, 16);
+        nextRank++;
+        target_rank = (target_rank + 1) % (params.channel_size + 1);
+      }
+    }
     else
     {
       // printf("Not implemented kernel_case %d\n", params.kernel_case);
@@ -631,7 +653,7 @@ struct Gemm {
       }
     }
     if (lastBlock) {
-      if (params.kernel_case == 0 || params.kernel_case == 1)
+      if (params.kernel_case == 0 || params.kernel_case == 1 || params.kernel_case == 4)
       {
         if (threadIdx.x == 0)
         {
