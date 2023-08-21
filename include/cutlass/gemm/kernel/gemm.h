@@ -464,8 +464,8 @@ struct Gemm {
 // #define DBEUG_CUDA
 #ifdef DBEUG_CUDA
    
-    if (threadIdx.x == 0 && blockIdx.x == 0) printf("sizes %d %d | blockDim %d %d %d | gridDim %d %d %d\n", 
-      (int) Mma::Shape::kM, (int) Mma::Shape::kN, blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z);
+    if (threadIdx.x == 0 && blockIdx.x == 0) printf("kM,kN,kK %d %d %d | blockDim %d %d %d | gridDim %d %d %d\n", 
+      (int) Mma::Shape::kM, (int) Mma::Shape::kN, (int) Mma::Shape::kK, blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z);
     if (threadIdx.x == 0)
     {
       printf("DEBUG startColIndex = %d\n", startColIndex);
@@ -610,13 +610,19 @@ struct Gemm {
     }
     else if (params.kernel_case == 4)
     {
-      int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+      // kM,kK,kN 128 32 128 | blockDim 128 1 1 | gridDim 96 16 1
+      // int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
       int nextChannel = params.rank + 1;
       for (int i = 0; i < params.channel_size; i++) {
         if (nextChannel >= params.channel_size) {
           nextChannel -= params.channel_size;
         }
-        for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+        const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
+        const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+        const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+        for (int rowIndex = startRowIndex + RowCopyGroupIdx;
+             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
+              rowIndex += RowCopyGroup)
         {
           int row_skip = rowIndex * params.problem_size.n();
           int column_skip = startColIndex;
@@ -624,7 +630,7 @@ struct Gemm {
           params.smChannels[nextChannel].put(
                         sizeof(cutlass::half_t) * src_offset,
                         min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
-                        threadIdx.x % 16, 16);
+                        threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
         nextChannel++;
       }
