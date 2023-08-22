@@ -611,28 +611,26 @@ struct Gemm {
     else if (params.kernel_case == 4)
     {
       // kM,kK,kN 128 32 128 | blockDim 128 1 1 | gridDim 96 16 1
-      // int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
-      int nextChannel = params.rank + 1;
-      for (int i = 0; i < params.channel_size; i++) {
-        if (nextChannel >= params.channel_size) {
-          nextChannel -= params.channel_size;
-        }
+      int owner = blockIdx.y % 8;
+      if (owner != params.rank) {
+        int channelIdx = owner;
+        if (channelIdx > params.rank)
+          channelIdx--;
         const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
         const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
         const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
         for (int rowIndex = startRowIndex + RowCopyGroupIdx;
              rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
-              rowIndex += RowCopyGroup)
+             rowIndex += RowCopyGroup)
         {
           int row_skip = rowIndex * params.problem_size.n();
           int column_skip = startColIndex;
           int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.n());
-          params.smChannels[nextChannel].put(
+          params.smChannels[channelIdx].put(
                         sizeof(cutlass::half_t) * src_offset,
                         min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
                         threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
-        nextChannel++;
       }
     }
     else
