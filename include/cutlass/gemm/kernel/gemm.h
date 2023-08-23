@@ -447,7 +447,7 @@ struct Gemm {
     }
 #endif
     {
-      // kM,kK,kN 128 32 128 | blockDim 128 1 1 | gridDim 96 16 1
+      // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 96 1
       int owner = blockIdx.y % 8;
       if (owner != params.rank) {
         int channelIdx = owner;
