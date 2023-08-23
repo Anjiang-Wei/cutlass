@@ -42,6 +42,11 @@
 #include "cutlass/semaphore.h"
 #include "cutlass/arch/arch.h"
 
+#include <vector>
+#include "mscclpp/sm_channel.hpp"
+#include "mscclpp/proxy.hpp"
+#include "mscclpp/fifo.hpp"
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -51,7 +56,7 @@ namespace kernel {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <
-  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate 
+  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate
   typename Epilogue_,             ///! Epilogue
   typename ThreadblockSwizzle_,   ///! Threadblock swizzling function
   bool SplitKSerial               ///! If true, code supporting split-K via serial reduction is enabled.
@@ -85,6 +90,13 @@ struct Gemm {
     int *semaphore;
     int gemm_k_size;
     // For gather+scatter operations
+    mscclpp::SmChannel::DeviceHandle* smChannels;
+    int channel_size;
+    // mscclpp::DeviceProxyFifo fifo;
+    // mscclpp::Host2DeviceSemaphore::DeviceHandle* handles;
+    int rank;
+    int kernel_case;
+    int* atmoic_counter;
     int const *gather_A_indices;
     int const *gather_B_indices;
     int const *scatter_D_indices;
@@ -106,6 +118,13 @@ struct Gemm {
       typename Epilogue::OutputTileIterator::TensorRef ref_D,
       typename OutputOp::Params output_op = typename OutputOp::Params(),
       int *workspace = nullptr,
+      mscclpp::SmChannel::DeviceHandle* smChannels_ = nullptr,
+      int channel_size_ = 0,
+      // mscclpp::DeviceProxyFifo fifo_ = mscclpp::DeviceProxyFifo(),
+      // mscclpp::Host2DeviceSemaphore::DeviceHandle* handles_ = nullptr,
+      int rank_ = 0,
+      int kernel_case_ = -1,
+      int* atmoic_counter_ = nullptr,
       int const *gather_A_indices = nullptr,
       int const *gather_B_indices = nullptr,
       int const *scatter_D_indices = nullptr
@@ -122,13 +141,22 @@ struct Gemm {
       params_D(ref_D.layout()),
       ref_D(ref_D),
       output_op(output_op),
+      smChannels(smChannels_),
+      channel_size(channel_size_),
+      // fifo(fifo_),
+      // handles(handles_),
+      rank(rank_),
+      kernel_case(kernel_case_),
+      atmoic_counter(atmoic_counter_),
       gather_A_indices(gather_A_indices),
       gather_B_indices(gather_B_indices),
       scatter_D_indices(scatter_D_indices) {
 
+      // printf("handles inside Params %p\n", handles);
+
       int total_gemm_k_iterations = (problem_size.k() + Mma::Shape::kK - 1) / Mma::Shape::kK;
       int gemm_k_iterations = (total_gemm_k_iterations + grid_tiled_shape.k() - 1) / grid_tiled_shape.k();
-      
+
       gemm_k_size = gemm_k_iterations * Mma::Shape::kK;
 
     semaphore = workspace;
@@ -139,6 +167,7 @@ struct Gemm {
   union SharedStorage {
     typename Mma::SharedStorage main_loop;
     typename Epilogue::SharedStorage epilogue;
+    // half_t allGatherCache[Mma::Shape::kN * (128/(Mma::Shape::kN*sizeof(half)/sizeof(long)))];
   };
 
   //
@@ -146,7 +175,7 @@ struct Gemm {
   //
 
   CUTLASS_HOST_DEVICE
-  Gemm() { } 
+  Gemm() { }
 
   /// Determines whether kernel satisfies alignment
   CUTLASS_HOST_DEVICE
@@ -269,10 +298,12 @@ struct Gemm {
     typename Mma::FragmentC accumulators;
 
     accumulators.clear();
-
+#define USEGEMM
     if (!kSplitKSerial || gemm_k_iterations > 0) {
       // Compute threadblock-scoped matrix multiply-add
+#ifdef USEGEMM
       mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators);
+#endif
     }
 
     //
@@ -337,7 +368,7 @@ struct Gemm {
 
     // Wait on the semaphore - this latency may have been covered by iterator construction
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1) {
-        
+
       // For subsequent threadblocks, the source matrix is held in the 'D' tensor.
       if (threadblock_tile_offset.k()) {
         iterator_C = iterator_D;
@@ -347,15 +378,17 @@ struct Gemm {
 
     }
 
+#ifdef USEGEMM
     // Execute the epilogue operator to update the destination tensor.
-    epilogue(output_op, iterator_D, accumulators, iterator_C); 
-    
+    epilogue(output_op, iterator_D, accumulators, iterator_C);
+#endif
+
     //
     // Release the semaphore
     //
 
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1) {
-      
+
       int lock = 0;
       if (params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1) {
 
@@ -369,7 +402,113 @@ struct Gemm {
 
       semaphore.release(lock);
     }
+    if (params.channel_size == 0)
+      return;
+    // __syncthreads();
+    if (kSplitKSerial && params.grid_tiled_shape.k() > 1 && (params.grid_tiled_shape.k() != threadblock_tile_offset.k() + 1))
+      return;
+    int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+    int startColIndex = threadblock_tile_offset.n() * Mma::Shape::kN;
+    // __syncthreads();
+// #define DEBUG_CUDA
+#ifdef DEBUG_CUDA
+   
+    if (threadIdx.x == 0 && blockIdx.x == 0) printf("kM,kN,kK %d %d %d | blockDim %d %d %d | gridDim %d %d %d\n", 
+      (int) Mma::Shape::kM, (int) Mma::Shape::kN, (int) Mma::Shape::kK, blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z);
+    if (threadIdx.x == 0)
+    {
+      printf("DEBUG startColIndex = %d\n", startColIndex);
+      printf("DEBUG  threadblock_tile_offset.m()=%d, n=%d, k=%d\n", threadblock_tile_offset.m(), threadblock_tile_offset.n(), threadblock_tile_offset.k());
+    }
+    if (threadIdx.x == 0) {
+      for (auto idx = startColIndex;  idx < startColIndex + Mma::Shape::kN; idx++)
+      {
+        auto val = params.ref_D.data()[idx];
+        if ((float)val != 8192 * 4) {
+              printf("blockIdx.x %d blockIdx.y %d *it == %f at %d\n", blockIdx.x, blockIdx.y, (float)val, idx);
+            break;
+        }
+      }
+    }
+    for (int rowIndex = startRowIndex; rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m(); rowIndex++)
+    {
+      if (threadIdx.x == 0)
+      {
+        printf("blockIdx.y %d startColIndex %d, params.rank %d index sum: %ld\n", blockIdx.y, (int)startColIndex, (int)params.rank,
+                              rowIndex * params.problem_size.n() * (params.channel_size+1) * sizeof(cutlass::half_t)
+                              + startColIndex * sizeof(cutlass::half_t) + params.rank *  params.problem_size.n() * sizeof(cutlass::half_t),
+                                min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t));
+        printf("offset %d, rank = %d\n", params.rank * 16 * 16, params.rank);
+        printf("comparison %d %d\n", params.problem_size.n(), Mma::Shape::kN);
+        printf("rowIndex=%d, params.problem_size.n()=%d, startColIndex=%d, sizeof=%d\n",
+              (int) rowIndex, (int) params.problem_size.n(), (int) startColIndex,
+              (int) sizeof(cutlass::half_t));
+      }
+    }
+#endif
+    {
+      // kM,kK,kN 128 32 128 | blockDim 128 1 1 | gridDim 96 16 1
+      int owner = blockIdx.y % 8;
+      if (owner != params.rank) {
+        int channelIdx = owner;
+        if (channelIdx > params.rank)
+          channelIdx--;
+        const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
+        const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+        const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+        for (int rowIndex = startRowIndex + RowCopyGroupIdx;
+             rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
+             rowIndex += RowCopyGroup)
+        {
+          int row_skip = rowIndex * params.problem_size.n();
+          int column_skip = startColIndex;
+          int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.n());
+          params.smChannels[channelIdx].put(
+                        sizeof(cutlass::half_t) * src_offset,
+                        min(params.problem_size.n(), Mma::Shape::kN) * sizeof(cutlass::half_t),
+                        threadIdx.x % ColCopyThreads, ColCopyThreads);
+        }
+      }
+    }
+    __syncthreads();
+    bool lastBlock;
+    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+    {
+      __threadfence();
+      int old_value = atomicAdd(params.atmoic_counter, 1);
+      if (old_value + 1 == gridDim.x * gridDim.y)
+      {
+        // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
+        *params.atmoic_counter = 0;
+        lastBlock = true;
+      }
+      else
+      {
+        lastBlock = false;
+      }
+    }
+    if (lastBlock) {
+      if (threadIdx.x == 0)
+      {
+        // printf("signal+wait\n");
+        for (int i = 0; i < params.channel_size; i++)
+        {
+          params.smChannels[i].signal();
+        }
+        // __syncthreads();
+        // __threadfence_system();
+        for (int i = 0; i < params.channel_size; i++)
+        {
+          params.smChannels[i].wait();
+        }
+      }
+    }
+
+
+
   }
+
+
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

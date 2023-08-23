@@ -46,6 +46,10 @@
 #include "cutlass/gemm/device/default_gemm_configuration.h"
 
 #include "cutlass/layout/permute.h"
+#include <vector>
+#include "mscclpp/sm_channel.hpp"
+#include "mscclpp/proxy.hpp"
+#include "mscclpp/fifo.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -302,6 +306,11 @@ class Gemm {
     TensorRef<ElementC, LayoutC> ref_D;
     typename EpilogueOutputOp::Params epilogue;
     int split_k_slices;
+    std::vector<mscclpp::SmChannel::DeviceHandle> smChannels;
+    // mscclpp::DeviceProxyFifo fifo;
+    // mscclpp::Host2DeviceSemaphore::DeviceHandle* handles;
+    int rank;
+    int kernel_case;
     // For gather+scatter operations
     int const *gather_A_indices;
     int const *gather_B_indices;
@@ -328,6 +337,11 @@ class Gemm {
       typename EpilogueOutputOp::Params epilogue_ = 
         typename EpilogueOutputOp::Params(),
       int split_k_slices = 1,
+      std::vector<mscclpp::SmChannel::DeviceHandle> smChannels_ = std::vector<mscclpp::SmChannel::DeviceHandle>(),
+      // mscclpp::DeviceProxyFifo fifo_ = mscclpp::DeviceProxyFifo(),
+      // mscclpp::Host2DeviceSemaphore::DeviceHandle* handles_ = nullptr,
+      int rank_ = 0,
+      int kernel_case_ = -1,
       int const *gather_A_indices_ = nullptr,
       int const *gather_B_indices_ = nullptr,
       int const *scatter_D_indices_ = nullptr
@@ -339,6 +353,11 @@ class Gemm {
       ref_D(ref_D_),
       epilogue(epilogue_),
       split_k_slices(split_k_slices),
+      smChannels(smChannels_),
+      // fifo(fifo_),
+      // handles(handles_),
+      rank(rank_),
+      kernel_case(kernel_case_),
       gather_A_indices(gather_A_indices_),
       gather_B_indices(gather_B_indices_),
       scatter_D_indices(scatter_D_indices_) {
@@ -401,7 +420,6 @@ public:
 
   /// Initializes GEMM state from arguments.
   Status initialize(Arguments const &args, void *workspace = nullptr, cudaStream_t stream = nullptr) {
-
     // Determine grid shape
     ThreadblockSwizzle threadblock_swizzle;
 
@@ -432,6 +450,20 @@ public:
       }
     }
 
+    mscclpp::SmChannel::DeviceHandle* smChannel_gpu;
+    cudaMalloc((void**) &smChannel_gpu, args.smChannels.size() * sizeof(mscclpp::SmChannel::DeviceHandle));
+    cudaMemcpy(smChannel_gpu, args.smChannels.data(), args.smChannels.size() * sizeof(mscclpp::SmChannel::DeviceHandle), cudaMemcpyHostToDevice);
+    
+
+    // todo: find a place to cudaFree the memory
+    // todo: calculate the accurate memory allocation based on batch_size and group_size
+    int* atmoic_counter;
+    cudaMalloc((void**) &atmoic_counter, sizeof(int) * 4097);
+    cudaMemset(atmoic_counter, 0, sizeof(int) * 4097);
+  
+    // printf("args.smChannels.size() = %d\n", (int) args.smChannels.size());
+    // printf("args.handles = %p\n", args.handles);
+
     // Initialize the Params structure
     params_ = typename GemmKernel::Params{
       args.problem_size,
@@ -442,6 +474,13 @@ public:
       args.ref_D,
       args.epilogue,
       static_cast<int *>(workspace),
+      smChannel_gpu,
+      (int) args.smChannels.size(),
+      // args.fifo,
+      // args.handles,
+      args.rank,
+      args.kernel_case,
+      atmoic_counter,
       args.gather_A_indices,
       args.gather_B_indices,
       args.scatter_D_indices
@@ -476,7 +515,7 @@ public:
 
     dim3 grid = threadblock_swizzle.get_grid_shape(params_.grid_tiled_shape);
     dim3 block(GemmKernel::kThreadCount, 1, 1);
-
+  // printf("grid %d %d %d\n", grid.x, grid.y, grid.z);
     cudaError_t result;
 
     int smem_size = int(sizeof(typename GemmKernel::SharedStorage));
@@ -490,7 +529,7 @@ public:
         return Status::kErrorInternal;
       }
     }
-
+    // printf("about to call the kernel\n");
     cutlass::Kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params_);
 
     result = cudaGetLastError();
