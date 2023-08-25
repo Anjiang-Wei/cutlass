@@ -447,7 +447,7 @@ struct Gemm {
     }
 #endif
     {
-      // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 96 1
+      // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 96 1 (GemmIdentityThreadblockSwizzle)
       int owner = blockIdx.y % 8;
       if (owner != params.rank) {
         int channelIdx = owner;
@@ -471,7 +471,7 @@ struct Gemm {
       }
     }
     __syncthreads();
-    bool lastBlock;
+    bool lastBlock = false;
     if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
     {
       __threadfence();
@@ -481,10 +481,6 @@ struct Gemm {
         // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
         *params.atmoic_counter = 0;
         lastBlock = true;
-      }
-      else
-      {
-        lastBlock = false;
       }
     }
     if (lastBlock) {
