@@ -402,7 +402,7 @@ struct Gemm {
 
       semaphore.release(lock);
     }
-    if (params.channel_size == 0)
+    if (params.channel_size == 0 || params.kernel_case == 2) // kernel_case 2: AllGather before GEMM
       return;
     // __syncthreads();
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1 && (params.grid_tiled_shape.k() != threadblock_tile_offset.k() + 1))
