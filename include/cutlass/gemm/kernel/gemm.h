@@ -263,6 +263,57 @@ struct Gemm {
     // Compute threadblock-scoped matrix multiply-add
     int gemm_k_iterations = (problem_size_k - tb_offset_A.column() + Mma::Shape::kK - 1) / Mma::Shape::kK;
 
+    // ----------- AllGather starts ---------------
+    if (params.kernel_case == 2 && params.channel_size > 0) {
+#define parallel_loader 16
+      const int Alignment = 16;
+      int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+      int startColIndex = threadblock_tile_offset.k() * Mma::Shape::kK;
+
+      int offset_m = (int) threadblock_tile_offset.m();
+      int offset_k = (int) threadblock_tile_offset.k();
+
+      // if (threadIdx.x == 0)
+      // printf("offset_k %d, Mma::Shape::kK %d\n", offset_k, (int) Mma::Shape::kK);
+      
+      int tile_owner = offset_k; // get_tile_owner(offset_m, (int) threadblock_tile_offset.k(), params.channel_size+1);
+      
+      if (tile_owner != params.rank) {
+        int row_skip = startRowIndex * params.problem_size.k();
+        int num_rows = min(Mma::Shape::kM, params.problem_size.m() - startRowIndex);
+
+        __shared__ int subBlockId;
+        int preval;
+        int* ready = params.atmoic_counter + 1 + offset_m;
+        volatile int* done = params.atmoic_counter + 1024 + offset_m;
+        volatile int* done2 = params.atmoic_counter + 2048 + offset_m;
+        if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+        {
+          preval = atomicAdd(ready, 1);
+          subBlockId = preval;
+        }
+        __syncthreads();
+        // if (subBlockId < parallel_loader)
+        // {
+        //   // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 96 1 (splitK) (GemmIdentityThreadblockSwizzle)
+        //   // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 48 3 (second GEMM, splitK=3)
+        //   int channel_idx = tile_owner > params.rank ? (tile_owner - 1) : tile_owner;
+        //   params.smChannels[channel_idx].get<Alignment, true>(sizeof(cutlass::half_t) * (row_skip + subBlockId * num_rows/parallel_loader * params.problem_size.k()),
+        //       params.problem_size.k() * sizeof(cutlass::half_t) * num_rows / parallel_loader,
+        //       threadIdx.x, blockDim.x);
+        //   __syncthreads();
+        //   if (threadIdx.x == 0){
+        //     // __threadfence();
+        //     atomicAdd((int*)done2, 1);
+        //   }
+        // }
+        // // __threadfence_system();
+        // while (*done2 < parallel_loader) {}
+        // __syncthreads();
+      }
+    }
+    // ----------- AllGather ends ---------------
+
     // Compute position within threadblock
     int thread_idx = threadIdx.x;
 
@@ -402,7 +453,7 @@ struct Gemm {
 
       semaphore.release(lock);
     }
-    if (params.channel_size == 0 || params.kernel_case == 2) // kernel_case 2: AllGather before GEMM
+    if (params.channel_size == 0)
       return;
     // __syncthreads();
     if (kSplitKSerial && params.grid_tiled_shape.k() > 1 && (params.grid_tiled_shape.k() != threadblock_tile_offset.k() + 1))
@@ -485,19 +536,32 @@ struct Gemm {
       }
     }
     if (lastBlock) {
-      if (threadIdx.x == 0)
+      if (params.kernel_case == 1) // scatter
       {
-        // printf("signal+wait\n");
-        for (int i = 0; i < params.channel_size; i++)
+        if (threadIdx.x == 0)
         {
-          params.smChannels[i].signal();
+          // printf("signal+wait\n");
+          for (int i = 0; i < params.channel_size; i++)
+          {
+            params.smChannels[i].signal();
+          }
+          // __syncthreads();
+          // __threadfence_system();
+          for (int i = 0; i < params.channel_size; i++)
+          {
+            params.smChannels[i].wait();
+          }
         }
-        // __syncthreads();
-        // __threadfence_system();
-        for (int i = 0; i < params.channel_size; i++)
-        {
-          params.smChannels[i].wait();
-        }
+      }
+      else // allgather, kernel_case == 2
+      {
+        int* ready = params.atmoic_counter + 1 + threadIdx.x;
+        volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
+        volatile int* done2 = params.atmoic_counter + 2048 + threadIdx.x;
+        // set it back to 0
+        *ready = 0;
+        *done = 0;
+        *done2 = 0;
       }
     }
 
