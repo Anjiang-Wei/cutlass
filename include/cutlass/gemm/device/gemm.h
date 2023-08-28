@@ -458,8 +458,8 @@ public:
     // todo: find a place to cudaFree the memory
     // todo: calculate the accurate memory allocation based on batch_size and group_size
     int* atmoic_counter;
-    cudaMalloc((void**) &atmoic_counter, sizeof(int) * 4097);
-    cudaMemset(atmoic_counter, 0, sizeof(int) * 4097);
+    cudaMalloc((void**) &atmoic_counter, sizeof(int) * 8192);
+    cudaMemset(atmoic_counter, 0, sizeof(int) * 8192);
   
     // printf("args.smChannels.size() = %d\n", (int) args.smChannels.size());
     // printf("args.handles = %p\n", args.handles);

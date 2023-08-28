@@ -268,55 +268,65 @@ struct Gemm {
       const int prev_kN = 128; // tile size for column
       int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
 
-      volatile int* done = params.atmoic_counter + 1024;
-
       const int total_columns = 96; // 12k / 128
+
+      const int row_offset = threadblock_tile_offset.m() * total_columns;
+      volatile int* done = params.atmoic_counter + 8 + row_offset;
+      volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
+
       int num_gpus = params.channel_size + 1;
+      int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
       for (int cur_column = 0; cur_column < total_columns; cur_column++)
       // for (int cur_column = blockIdx.y * 2; cur_column < blockIdx.y * 2 + 2; cur_column++) // this hangs
       {
         int owner = cur_column % num_gpus;
         if (owner == params.rank) // already the owner
-          continue;
-        volatile int* state = done + cur_column;
-        if (*state == 0)
         {
+          continue;
+        }
+        volatile int* state = done + cur_column;
+        volatile int* responsible = done2 + cur_column;
+        if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+        {
+          int preval = atomicAdd((int*) state, 1);
+          if (preval == 0)
+          {
+            *responsible = blockId;
+          }
+          // else
+          // {
+          //   if (params.rank == 0 && threadIdx.x == 0)
+          //     printf("nores %d %d: %d %p, blockIdx %d %d %d\n", (int) threadblock_tile_offset.m(), (int) cur_column, (int) preval, state, (int) blockIdx.x, (int) blockIdx.y, (int) blockIdx.z);
+          // }
+        }
+        __syncthreads();
+        if (*responsible == blockId)
+        // invoke get
+        {
+          int channel_idx = owner > params.rank ? (owner - 1) : owner;
+
+          const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
+          const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+          const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+          for (int rowIndex = startRowIndex + RowCopyGroupIdx;
+              rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
+              rowIndex += RowCopyGroup)
+          {
+            int row_skip = rowIndex * params.problem_size.k();
+            int column_skip = cur_column * prev_kN;
+            int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.k());
+            int dest_offset =  (row_skip + column_skip) + owner * (params.problem_size.m() * params.problem_size.k());
+            params.smChannels[channel_idx].get(
+                          sizeof(cutlass::half_t) * dest_offset,
+                          sizeof(cutlass::half_t) * src_offset,
+                          prev_kN * sizeof(cutlass::half_t),
+                          threadIdx.x % ColCopyThreads, ColCopyThreads);
+          }
+          __syncthreads();
+#define STATE_MAGIC 0x12345
           if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
           {
-            (*state) = 1;
-          }
-
-          // invoke get
-          {
-            int row_skip = startRowIndex * params.problem_size.k();
-            int channelIdx = owner > params.rank ? (owner - 1) : owner;
-
-            const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
-            const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
-            const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
-            for (int rowIndex = startRowIndex + RowCopyGroupIdx;
-                rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
-                rowIndex += RowCopyGroup)
-            {
-              int row_skip = rowIndex * params.problem_size.k();
-              int column_skip = cur_column * prev_kN;
-              int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.k());
-              int dest_offset =  (row_skip + column_skip) + owner * (params.problem_size.m() * params.problem_size.k());
-              params.smChannels[channelIdx].get(
-                            sizeof(cutlass::half_t) * dest_offset,
-                            sizeof(cutlass::half_t) * src_offset,
-                            prev_kN * sizeof(cutlass::half_t),
-                            threadIdx.x % ColCopyThreads, ColCopyThreads);
-            }
-            if (params.rank == 0 && threadIdx.x == 0)
-            {
-              printf("I get tile col %d, row %d from owner %d, blockIdx %d %d %d\n",
-                        cur_column, startRowIndex, owner, blockIdx.x, blockIdx.y, blockIdx.z);
-            }
-          }
-          if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-          {
-            (*state) = 2;
+            (*responsible) = STATE_MAGIC;
           }
         }
       }
@@ -326,7 +336,8 @@ struct Gemm {
         if (owner == params.rank) // already the owner
           continue;
         volatile int* state = done + cur_column;
-        while ((*state) != 2) {}
+        volatile int* responsible = done2 + cur_column;
+        while ((*responsible) != STATE_MAGIC) {}
       }
     }
     // ----------- AllGather ends ---------------
@@ -514,6 +525,7 @@ struct Gemm {
       }
     }
 #endif
+    if (params.kernel_case == 1)
     {
       // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 96 1 (splitK) (GemmIdentityThreadblockSwizzle)
       // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 48 8 (second GEMM, splitK=8)
@@ -572,13 +584,25 @@ struct Gemm {
       }
       else // allgather, kernel_case == 2
       {
-        int* ready = params.atmoic_counter + 1 + threadIdx.x;
-        volatile int* done = params.atmoic_counter + 1024 + threadIdx.x;
-        volatile int* done2 = params.atmoic_counter + 2048 + threadIdx.x;
-        // set it back to 0
-        *ready = 0;
-        *done = 0;
-        *done2 = 0;
+        const int total_row_grid = 16; // 2k / 128
+        const int total_col_grid = 96; // 12k / 128
+
+      /*const int total_columns = 96; // 12k / 128
+
+      const int row_offset = threadblock_tile_offset.m() * total_columns;
+      volatile int* done = params.atmoic_counter + 8 + row_offset;
+      volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
+      */
+        for (int i = 0; i < total_row_grid; i++)
+        {
+          // 128 threads > 96 total_col_grid
+          int row_offset = i * total_col_grid;
+          volatile int* done = params.atmoic_counter + 8 + row_offset;
+          volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
+          *(done + threadIdx.x) = 0;
+          *(done2 + threadIdx.x) = 0;
+        }
+        __syncthreads();
       }
     }
 
