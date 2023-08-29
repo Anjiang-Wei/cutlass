@@ -227,6 +227,22 @@ struct Gemm {
     return Status::kSuccess;
   }
 
+#define STATE_MAGIC 0x12345
+CUTLASS_DEVICE
+void check_transfer_done(volatile int* done2, int rank)
+  {
+    const int total_columns = 96; // 12k / 128
+    const int num_gpus = 8;
+    for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
+    {
+      int owner = cur_column % num_gpus;
+      if (owner == rank) // already the owner
+        continue;
+      volatile int* responsible = done2 + cur_column;
+      while ((*responsible) != STATE_MAGIC) {}
+    }
+  }
+
   /// Executes one GEMM
   CUTLASS_DEVICE
   void operator()(Params const &params, SharedStorage &shared_storage) {
@@ -323,7 +339,6 @@ struct Gemm {
                           threadIdx.x % ColCopyThreads, ColCopyThreads);
           }
           __syncthreads();
-#define STATE_MAGIC 0x12345
           if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
           {
             (*responsible) = STATE_MAGIC;
@@ -331,15 +346,17 @@ struct Gemm {
         }
       }
       __syncthreads();
-      for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
-      {
-        int owner = cur_column % num_gpus;
-        if (owner == params.rank) // already the owner
-          continue;
-        volatile int* state = done + cur_column;
-        volatile int* responsible = done2 + cur_column;
-        while ((*responsible) != STATE_MAGIC) {}
-      }
+      check_transfer_done(done2, params.rank);
+      
+      // for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
+      // {
+      //   int owner = cur_column % num_gpus;
+      //   if (owner == params.rank) // already the owner
+      //     continue;
+      //   volatile int* state = done + cur_column;
+      //   volatile int* responsible = done2 + cur_column;
+      //   while ((*responsible) != STATE_MAGIC) {}
+      // }
       
       __syncthreads();
     }
