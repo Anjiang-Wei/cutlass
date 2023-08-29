@@ -305,6 +305,7 @@ public:
 
         CUTLASS_PRAGMA_UNROLL
         for (int v = 0; v < IteratorA::kAccessesPerVector; ++v) {
+          //wait until iterator_A.get() is ready
           auto gmem_ptr = iterator_A.get();
 
           if (SharedMemoryClear == SharedMemoryClearOption::kZfill) {
@@ -391,7 +392,7 @@ public:
               IteratorA::kAccessesPerVector / 8;
 
           int src_bytes = (iterator_A.valid() ? kSrcBytes : 0);
-
+          //wait until iterator_A.get() is ready
           cutlass::arch::cp_async_zfill<kSrcBytes, kCacheOpA>(
               dst_ptr + v, iterator_A.get(), iterator_A.valid());
 

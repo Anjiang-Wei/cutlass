@@ -227,22 +227,6 @@ struct Gemm {
     return Status::kSuccess;
   }
 
-#define STATE_MAGIC 0x12345
-CUTLASS_DEVICE
-void check_transfer_done(volatile int* done2, int rank)
-  {
-    const int total_columns = 96; // 12k / 128
-    const int num_gpus = 8;
-    for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
-    {
-      int owner = cur_column % num_gpus;
-      if (owner == rank) // already the owner
-        continue;
-      volatile int* responsible = done2 + cur_column;
-      while ((*responsible) != STATE_MAGIC) {}
-    }
-  }
-
   /// Executes one GEMM
   CUTLASS_DEVICE
   void operator()(Params const &params, SharedStorage &shared_storage) {
@@ -339,6 +323,7 @@ void check_transfer_done(volatile int* done2, int rank)
                           threadIdx.x % ColCopyThreads, ColCopyThreads);
           }
           __syncthreads();
+#define STATE_MAGIC 0x12345
           if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
           {
             (*responsible) = STATE_MAGIC;
@@ -346,17 +331,16 @@ void check_transfer_done(volatile int* done2, int rank)
         }
       }
       __syncthreads();
-      check_transfer_done(done2, params.rank);
-      
-      // for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
-      // {
-      //   int owner = cur_column % num_gpus;
-      //   if (owner == params.rank) // already the owner
-      //     continue;
-      //   volatile int* state = done + cur_column;
-      //   volatile int* responsible = done2 + cur_column;
-      //   while ((*responsible) != STATE_MAGIC) {}
-      // }
+
+      for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
+      {
+        int owner = cur_column % num_gpus;
+        if (owner == params.rank) // already the owner
+          continue;
+        volatile int* state = done + cur_column;
+        volatile int* responsible = done2 + cur_column;
+        while ((*responsible) != STATE_MAGIC) {}
+      }
       
       __syncthreads();
     }
@@ -393,7 +377,7 @@ void check_transfer_done(volatile int* done2, int rank)
 
     // Construct thread-scoped matrix multiply
     Mma mma(shared_storage.main_loop, thread_idx, warp_idx, lane_idx);
-
+    // printf("384: %s\n", __PRETTY_FUNCTION__);
     typename Mma::FragmentC accumulators;
 
     accumulators.clear();
@@ -548,7 +532,7 @@ void check_transfer_done(volatile int* done2, int rank)
     if (params.kernel_case == 1)
     {
       // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 96 1 (splitK) (GemmIdentityThreadblockSwizzle)
-      // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 48 8 (second GEMM, splitK=8)
+      // kM,kN,kK 128 128 32 | blockDim 128 1 1 | gridDim 16 48 3 (second GEMM, splitK=3)
       int owner = blockIdx.y % 8;
       if (owner != params.rank) {
         int channelIdx = owner;
