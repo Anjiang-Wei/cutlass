@@ -550,64 +550,74 @@ struct Gemm {
                         threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
       }
-    }
-    __syncthreads();
-    bool lastBlock = false;
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-    {
-      __threadfence();
-      int old_value = atomicAdd(params.atmoic_counter, 1);
-      if (old_value + 1 == gridDim.x * gridDim.y)
+      __syncthreads();
+      bool lastBlock = false;
+      if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
       {
-        // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
-        *params.atmoic_counter = 0;
-        lastBlock = true;
-      }
-    }
-    if (lastBlock) {
-      if (params.kernel_case == 1) // scatter
-      {
-        if (threadIdx.x == 0)
+        __threadfence();
+        int old_value = atomicAdd(params.atmoic_counter, 1);
+        if (old_value + 1 == gridDim.x * gridDim.y)
         {
-          // printf("signal+wait\n");
-          for (int i = 0; i < params.channel_size; i++)
+          // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
+          *params.atmoic_counter = 0;
+          lastBlock = true;
+        }
+      }
+      if (lastBlock) {
+        if (params.kernel_case == 1) // scatter
+        {
+          if (threadIdx.x == 0)
           {
-            params.smChannels[i].signal();
-          }
-          // __syncthreads();
-          // __threadfence_system();
-          for (int i = 0; i < params.channel_size; i++)
-          {
-            params.smChannels[i].wait();
+            // printf("signal+wait\n");
+            for (int i = 0; i < params.channel_size; i++)
+            {
+              params.smChannels[i].signal();
+            }
+            // __syncthreads();
+            // __threadfence_system();
+            for (int i = 0; i < params.channel_size; i++)
+            {
+              params.smChannels[i].wait();
+            }
           }
         }
       }
-      else // allgather, kernel_case == 2
+    }
+    else // allgather, kernel_case == 2
+    {
+      if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+      {
+        __threadfence();
+        int old_value = atomicAdd(params.atmoic_counter, 1);
+        if (old_value + 1 == gridDim.x * gridDim.y)
+        {
+          // if (params.rank == 0) printf("before signal %d, rank %d threadblock.n() %d threadblock.m() %d k() %d\n", *params.atmoic_counter, params.rank, threadblock_tile_offset.n(), threadblock_tile_offset.m(), threadblock_tile_offset.k());
+          *params.atmoic_counter = 0;
+          *(params.atmoic_counter + 1) = 1;
+        }
+      }
+      __syncthreads();
+      if (*(params.atmoic_counter + 1) == 1) // last thread block
       {
         const int total_row_grid = 16; // 2k / 128
         const int total_col_grid = 96; // 12k / 128
 
-      /*const int total_columns = 96; // 12k / 128
-
-      const int row_offset = threadblock_tile_offset.m() * total_columns;
-      volatile int* done = params.atmoic_counter + 8 + row_offset;
-      volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
-      */
         for (int i = 0; i < total_row_grid; i++)
         {
           // 128 threads > 96 total_col_grid
           int row_offset = i * total_col_grid;
           volatile int* done = params.atmoic_counter + 8 + row_offset;
           volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
-          *(done + threadIdx.x) = 0;
-          *(done2 + threadIdx.x) = 0;
+          *(done + int(threadIdx.x)) = 0;
+          *(done2 + int(threadIdx.x)) = 0;
         }
         __syncthreads();
+        if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+        {
+          *(params.atmoic_counter + 1) = 0;
+        }
       }
     }
-
-
-
   }
 
 
