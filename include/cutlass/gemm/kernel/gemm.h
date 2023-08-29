@@ -330,7 +330,8 @@ struct Gemm {
           }
         }
       }
-      for (int cur_column = 0; cur_column < total_columns; cur_column++)
+      __syncthreads();
+      for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
       {
         int owner = cur_column % num_gpus;
         if (owner == params.rank) // already the owner
@@ -339,6 +340,8 @@ struct Gemm {
         volatile int* responsible = done2 + cur_column;
         while ((*responsible) != STATE_MAGIC) {}
       }
+      
+      __syncthreads();
     }
     // ----------- AllGather ends ---------------
 
