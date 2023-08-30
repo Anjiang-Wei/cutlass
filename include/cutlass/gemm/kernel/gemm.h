@@ -385,7 +385,7 @@ struct Gemm {
     if (!kSplitKSerial || gemm_k_iterations > 0) {
       // Compute threadblock-scoped matrix multiply-add
 #ifdef USEGEMM
-      mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators);
+      mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators/*, params.rank, params.ref_A.data(), iterator_A.get()*/);
 #endif
     }
 

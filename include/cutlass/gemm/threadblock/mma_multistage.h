@@ -292,6 +292,7 @@ public:
     this->smem_iterator_A_.set_iteration_index(group_start_A);
 
     // Async Copy for operand A
+    // wait for 32 * 4 elements of each row
     CUTLASS_PRAGMA_UNROLL
     for (int j = 0; j < Detail::kAccessesPerGroupA; ++j) {
       if (group_start_A + j < Detail::AsyncCopyIterationsPerStageA) {
@@ -305,8 +306,11 @@ public:
 
         CUTLASS_PRAGMA_UNROLL
         for (int v = 0; v < IteratorA::kAccessesPerVector; ++v) {
-          //wait until iterator_A.get() is ready
+          // modify: wait until iterator_A.get() is ready
           auto gmem_ptr = iterator_A.get();
+          // printf("inside copy_tiles_and_advance, kAccessesPerVector %d, kSrcBytes %d iterator_A.get() %p, %d %d %d; %d %d %d; %d %d %d\n",
+          //        IteratorA::kAccessesPerVector, kSrcBytes, iterator_A.get(),
+          //        threadIdx.x, threadIdx.y, threadIdx.z, blockDim.x, blockDim.y, blockDim.z, blockIdx.x, blockIdx.y, blockIdx.z);
 
           if (SharedMemoryClear == SharedMemoryClearOption::kZfill) {
             cutlass::arch::cp_async_zfill<kSrcBytes, kCacheOpA>(
@@ -364,11 +368,16 @@ public:
   void prologue(
     IteratorA &iterator_A,      ///< [in|out] iterator over A operand in global memory
     IteratorB &iterator_B,      ///< [in|out] iterator over B operand in global memory
-    int &gemm_k_iterations)     ///< [in|out] number of threadblock mainloop iterations remaining
+    int &gemm_k_iterations      ///< [in|out] number of threadblock mainloop iterations remaining
+    /*int rank*/)     
   {
+    // modify: wait for 128 to be loaded (4 * 32);
+    //smchannel.get()
+    //if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) 
+    // modify: wait until iterator_A.get() is ready
     // Issue several complete stages
     CUTLASS_PRAGMA_UNROLL
-    for (int stage = 0; stage < Base::kStages - 1; ++stage, --gemm_k_iterations) {
+    for (int stage = 0; stage < Base::kStages - 1; ++stage, --gemm_k_iterations) { // 4 stages; gemm_k_iterations init as 
 
       // Disable global fetching if done with global fetch iterations
       iterator_A.clear_mask(gemm_k_iterations == 0);
@@ -379,7 +388,7 @@ public:
 
       // Async Copy for operand A
       CUTLASS_PRAGMA_UNROLL
-      for (int j = 0; j < Detail::AsyncCopyIterationsPerStageA; ++j) {
+      for (int j = 0; j < Detail::AsyncCopyIterationsPerStageA; ++j) { // 32 elements each row
         typename IteratorA::AccessType *dst_ptr =
             reinterpret_cast<typename IteratorA::AccessType *>(
                 this->smem_iterator_A_.get());
@@ -392,7 +401,6 @@ public:
               IteratorA::kAccessesPerVector / 8;
 
           int src_bytes = (iterator_A.valid() ? kSrcBytes : 0);
-          //wait until iterator_A.get() is ready
           cutlass::arch::cp_async_zfill<kSrcBytes, kCacheOpA>(
               dst_ptr + v, iterator_A.get(), iterator_A.valid());
 
@@ -716,10 +724,14 @@ public:
       ///< iterator over B operand in global memory
       IteratorB iterator_B,
       ///< initial value of accumulator
-      FragmentC const &src_accum) {
+      FragmentC const &src_accum
+      /*int rank,
+      void* ref_A_data,
+      void* iteratorA_get*/) {
 
     // Prologue (start fetching iterations of global fragments into shared memory)
-    prologue(iterator_A, iterator_B, gemm_k_iterations);
+    // printf("p1 %p, p2 %p\n", ref_A_data, iteratorA_get);
+    prologue(iterator_A, iterator_B, gemm_k_iterations/*, rank*/);
 
     // Wait until we have at least one completed global fetch stage
     gmem_wait();
