@@ -394,8 +394,7 @@ public:
 
     // address_offset = 0;
     // element_idx = 0;
-    int row_idx = tile_offset_m;
-    int col_idx = tile_offset_n;
+    // int index = (tile_offset_m * problem_n / kN) + tile_offset_n;
     // index = 0;
     // if (rank == 1)
     //     printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
@@ -419,12 +418,8 @@ public:
       //   }
       // }
       // __syncthreads();
-      // // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0)
       // if (*responsible == blockId) // invoke get
-      // {
-
-        
-
+      {
         // if (rank == 1)
         // printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
         //     element_idx, row_idx, col_idx, index,
@@ -456,20 +451,17 @@ public:
                         threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
         __syncthreads();
+        // #define STATE_MAGIC 0x12345
+        // if (threadIdx.x == 0)
+        // {
+        //   (*responsible) = STATE_MAGIC;
+        // }
+        // __syncthreads();
+      }
     }
-
-        
-// #define STATE_MAGIC 0x12345
-//         if (threadIdx.x == 0)
-//         {
-//           (*responsible) = STATE_MAGIC;
-//         }
-//       }
-//       __syncthreads();
-//       while ((*responsible) != STATE_MAGIC) {}
-//       __syncthreads();
-      
-    }
+    // while ((*responsible) != STATE_MAGIC) {}
+    // __syncthreads();
+  }
 
   /// GEMM prologue.  Bootstrap the global->shared memory pipeline by fetching
   /// the global fragments needed by the first kStages-1 threadblock mainloop iterations
