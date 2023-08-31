@@ -297,13 +297,13 @@ public:
                                    IteratorA::kAccessesPerVector);
     this->smem_iterator_A_.set_iteration_index(group_start_A);
 
-    if (transfer)
-    {
-      for (int i = 1; i < 96; i++)
-      {
-        get_transfer(rank, tile_offset_m, i, atomic_counter, smChannels);
-      }
-    }
+    // if (transfer)
+    // {
+    //   for (int i = 1; i < 96; i++)
+    //   {
+    //     get_transfer(rank, tile_offset_m, i, atomic_counter, smChannels);
+    //   }
+    // }
 
     // Async Copy for operand A
     // wait for 32 * 4 elements of each row
@@ -803,9 +803,19 @@ public:
       pipe_state.tmp_accum_.clear();
     }
 
+    // if (transfer)
+    // {
+    //   for (int i = 1; i < 96; i++)
+    //   {
+    //     get_transfer(rank, tile_offset_m, i, atomic_counter, smChannels);
+    //   }
+    // }
+    int i = 0;
     // Mainloop
-    CUTLASS_GEMM_LOOP
+    CUTLASS_GEMM_LOOP // from 379 to -4,  384 = 96 * 4; Base::kWarpGemmIterations = 2
     for (; gemm_k_iterations > (-Base::kStages + 1);) {
+      if (transfer && i % 4 == 0 && gemm_k_iterations > 0)
+        get_transfer(rank, tile_offset_m, (i / 4 + 1), atomic_counter, smChannels);
       mac_loop_iter(
         pipe_state,
         accum,
@@ -817,6 +827,7 @@ public:
         tile_offset_m,
         atomic_counter,
         smChannels);
+      i++;
     }
 
     if (Detail::kStagedAccumulation) {
