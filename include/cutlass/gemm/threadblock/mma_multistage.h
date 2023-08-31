@@ -286,10 +286,24 @@ public:
 
   CUTLASS_DEVICE
   void copy_tiles_and_advance(IteratorA &iterator_A, IteratorB &iterator_B,
-                              int group_start_A = 0, int group_start_B = 0) {
+                              int group_start_A = 0, int group_start_B = 0
+                              ,
+                              bool transfer = false,
+                              int rank = 0,
+                              int tile_offset_m = 0,
+                              int* atomic_counter = NULL,
+                              mscclpp::SmChannel::DeviceHandle* smChannels = NULL) {
     iterator_A.set_iteration_index(group_start_A *
                                    IteratorA::kAccessesPerVector);
     this->smem_iterator_A_.set_iteration_index(group_start_A);
+
+    if (transfer)
+    {
+      for (int i = 1; i < 96; i++)
+      {
+        get_transfer(rank, tile_offset_m, i, atomic_counter, smChannels);
+      }
+    }
 
     // Async Copy for operand A
     // wait for 32 * 4 elements of each row
@@ -362,6 +376,101 @@ public:
     }
   }
 
+
+  CUTLASS_DEVICE
+  void get_transfer(int rank, int tile_offset_m, int tile_offset_n, int* atomic_counter, 
+                        mscclpp::SmChannel::DeviceHandle* smChannels)
+  {
+    const int kM = 128;
+    const int kN = 128;
+    const int problem_m = 2048;
+    const int problem_n = 12288;
+    const int num_gpus = 8;
+    // int address_offset = (long long) tile_start_A - (long long) origin_start_A;
+    // int element_idx = address_offset / sizeof(half_t);
+    // int row_idx = (element_idx / problem_n) / kM;
+    // int col_idx = (element_idx % problem_n) / kN;
+    // int index = row_idx * (problem_n / kN) + col_idx;
+
+    // address_offset = 0;
+    // element_idx = 0;
+    int row_idx = tile_offset_m;
+    int col_idx = tile_offset_n;
+    // index = 0;
+    // if (rank == 1)
+    //     printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
+    //         element_idx, row_idx, col_idx, index,
+    //         threadIdx.x, blockDim.x, blockIdx.x, blockIdx.y, blockIdx.z);
+
+    // volatile int* state = atomic_counter + 8 + index;
+    // volatile int* responsible = atomic_counter + 2048 + index;
+
+    int owner = tile_offset_n % num_gpus;
+    
+    int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
+    if (owner != rank) // not the owner
+    {
+      // if (threadIdx.x == 0)
+      // {
+      //   int preval = atomicAdd((int*) state, 1);
+      //   if (preval == 0)
+      //   {
+      //     *responsible = blockId;
+      //   }
+      // }
+      // __syncthreads();
+      // // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0)
+      // if (*responsible == blockId) // invoke get
+      // {
+
+        
+
+        // if (rank == 1)
+        // printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
+        //     element_idx, row_idx, col_idx, index,
+        //     threadIdx.x, blockDim.x, blockIdx.x, blockIdx.y, blockIdx.z);
+        // if (rank == 1 && threadIdx.x == 0)
+        //   printf("tile_offset_m %d\n", tile_offset_m);
+        int startRowIndex = tile_offset_m * kM;
+        int channel_idx = owner > rank ? (owner - 1) : owner;
+
+        const int ColCopyThreads = kN * sizeof(cutlass::half_t) / 16;
+        const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+        const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+        for (int rowIndex = startRowIndex + RowCopyGroupIdx;
+            rowIndex < startRowIndex + kM && rowIndex < problem_m;
+            rowIndex += RowCopyGroup)
+        {
+          int row_skip = rowIndex * problem_n;
+          int column_skip = tile_offset_n * kN;
+          int src_offset =  (row_skip + column_skip) + rank * problem_m * problem_n;
+          int dest_offset = (row_skip + column_skip) + owner * problem_m * problem_n;
+          // if (threadIdx.x == 0 && rank == 1)
+          //   printf("row_skip %d, column_skip %d, src_offset %d, dest_offset %d\n",
+          //           row_skip, column_skip, src_offset, dest_offset);
+          // printf("RowCopyGroup %d ColCopyThreads %d, dest_offset %d, src_offset %d\n", RowCopyGroup, ColCopyThreads, dest_offset, src_offset);
+          smChannels[channel_idx].get(
+                        sizeof(cutlass::half_t) * dest_offset,
+                        sizeof(cutlass::half_t) * src_offset,
+                        kN * sizeof(cutlass::half_t),
+                        threadIdx.x % ColCopyThreads, ColCopyThreads);
+        }
+        __syncthreads();
+    }
+
+        
+// #define STATE_MAGIC 0x12345
+//         if (threadIdx.x == 0)
+//         {
+//           (*responsible) = STATE_MAGIC;
+//         }
+//       }
+//       __syncthreads();
+//       while ((*responsible) != STATE_MAGIC) {}
+//       __syncthreads();
+      
+    }
+
   /// GEMM prologue.  Bootstrap the global->shared memory pipeline by fetching
   /// the global fragments needed by the first kStages-1 threadblock mainloop iterations
   CUTLASS_DEVICE
@@ -369,11 +478,22 @@ public:
     IteratorA &iterator_A,      ///< [in|out] iterator over A operand in global memory
     IteratorB &iterator_B,      ///< [in|out] iterator over B operand in global memory
     int &gemm_k_iterations      ///< [in|out] number of threadblock mainloop iterations remaining
-    /*int rank*/)     
+    ,
+    bool transfer,
+    int rank,
+    int tile_offset_m,
+    // void* origin_start_A,
+    // void* tile_start_A,
+    int* atomic_counter,
+    mscclpp::SmChannel::DeviceHandle* smChannels)
   {
     // modify: wait for 128 to be loaded (4 * 32);
     //smchannel.get()
     //if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) 
+    if (transfer)
+    {
+      get_transfer(rank, tile_offset_m, 0, atomic_counter, smChannels);
+    }
     // modify: wait until iterator_A.get() is ready
     // Issue several complete stages
     CUTLASS_PRAGMA_UNROLL
@@ -401,6 +521,14 @@ public:
               IteratorA::kAccessesPerVector / 8;
 
           int src_bytes = (iterator_A.valid() ? kSrcBytes : 0);
+          // if (rank == 0)
+          // {
+          //   int offset = (long long) (iterator_A.get()) - (long long) tile_start_A;
+          //   // printf("bytes %d, block %d %d %d threadIdx.x %d, tile_start_A %p, offset %d, iter %d %d %d\n",
+          //   //         src_bytes, blockIdx.x, blockIdx.y, blockIdx.z, threadIdx.x,
+          //   //         tile_start_A, offset,
+          //   //         stage, j, v);
+          // }
           cutlass::arch::cp_async_zfill<kSrcBytes, kCacheOpA>(
               dst_ptr + v, iterator_A.get(), iterator_A.valid());
 
@@ -507,7 +635,13 @@ public:
     FragmentC &accum,               ///< [in|out] destination accumulator tile
     IteratorA &iterator_A,          ///< [in|out] iterator over A operand in global memory
     IteratorB &iterator_B,          ///< [in|out] iterator over B operand in global memory
-    int &gemm_k_iterations)         ///< [in|out] number of threadblock mainloop iterations remaining
+    int &gemm_k_iterations          ///< [in|out] number of threadblock mainloop iterations remaining
+    ,
+    bool transfer,
+    int rank,
+    int tile_offset_m,
+    int* atomic_counter,
+    mscclpp::SmChannel::DeviceHandle* smChannels)
   {
     // Unroll the warp-level MMA tiles of a threadblock's mainloop iteration
     CUTLASS_PRAGMA_UNROLL
@@ -567,7 +701,12 @@ public:
             iterator_A,
             iterator_B,
             group_start_iteration_A,
-            group_start_iteration_B);
+            group_start_iteration_B,
+            transfer,
+            rank,
+            tile_offset_m,
+            atomic_counter,
+            smChannels);
       }
 
       // The second-to-last warp-tile also:
@@ -583,7 +722,12 @@ public:
           iterator_A,
           iterator_B,
           group_start_iteration_A,
-          group_start_iteration_B);
+          group_start_iteration_B,
+          transfer,
+          rank,
+          tile_offset_m,
+          atomic_counter,
+          smChannels);
 
         // Inserts a memory fence between stages of cp.async instructions.
         cutlass::arch::cp_async_fence();
@@ -624,7 +768,13 @@ public:
       int gemm_k_iterations,        ///< number of threadblock mainloop iterations
       FragmentC &accum,             ///< [in|out] accumulator tile
       IteratorA &iterator_A,        ///< [in|out] iterator over A operand in global memory
-      IteratorB &iterator_B)        ///< [in|out] iterator over B operand in global memory
+      IteratorB &iterator_B         ///< [in|out] iterator over B operand in global memory
+      ,
+      bool transfer,
+      int rank,
+      int tile_offset_m,
+      int* atomic_counter,
+      mscclpp::SmChannel::DeviceHandle* smChannels)
   {
     PipeState pipe_state;
 
@@ -661,7 +811,12 @@ public:
         accum,
         iterator_A,
         iterator_B,
-        gemm_k_iterations);
+        gemm_k_iterations,
+        transfer,
+        rank,
+        tile_offset_m,
+        atomic_counter,
+        smChannels);
     }
 
     if (Detail::kStagedAccumulation) {
@@ -725,13 +880,18 @@ public:
       IteratorB iterator_B,
       ///< initial value of accumulator
       FragmentC const &src_accum
-      /*int rank,
-      void* ref_A_data,
-      void* iteratorA_get*/) {
+      ,
+      bool transfer,
+      int rank,
+      // void* origin_start_A,
+      // void* tile_start_A,
+      int tile_offset_m,
+      int* atomic_counter,
+      mscclpp::SmChannel::DeviceHandle* smChannels) {
 
     // Prologue (start fetching iterations of global fragments into shared memory)
     // printf("p1 %p, p2 %p\n", ref_A_data, iteratorA_get);
-    prologue(iterator_A, iterator_B, gemm_k_iterations/*, rank*/);
+    prologue(iterator_A, iterator_B, gemm_k_iterations, transfer, rank, tile_offset_m, atomic_counter, smChannels);
 
     // Wait until we have at least one completed global fetch stage
     gmem_wait();
@@ -740,7 +900,7 @@ public:
     accum = src_accum;
 
     // Perform the MAC-iterations
-    gemm_iters(gemm_k_iterations, accum, iterator_A, iterator_B);
+    gemm_iters(gemm_k_iterations, accum, iterator_A, iterator_B, transfer, rank, tile_offset_m, atomic_counter, smChannels);
   }
 };
 

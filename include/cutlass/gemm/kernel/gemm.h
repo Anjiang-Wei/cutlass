@@ -265,84 +265,84 @@ struct Gemm {
 
     // ----------- AllGather starts ---------------
     if (params.kernel_case == 2 && params.channel_size > 0) {
-      const int prev_kN = 128; // tile size for column
-      int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
+//       const int prev_kN = 128; // tile size for column
+//       int startRowIndex = threadblock_tile_offset.m() * Mma::Shape::kM;
 
-      const int total_columns = 96; // 12k / 128
+//       const int total_columns = 96; // 12k / 128
 
-      const int row_offset = threadblock_tile_offset.m() * total_columns;
-      volatile int* done = params.atmoic_counter + 8 + row_offset;
-      volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
+//       const int row_offset = threadblock_tile_offset.m() * total_columns;
+//       volatile int* done = params.atmoic_counter + 8 + row_offset;
+//       volatile int* done2 = params.atmoic_counter + 2048 + row_offset;
 
-      int num_gpus = params.channel_size + 1;
-      int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
-      for (int cur_column = 0; cur_column < total_columns; cur_column++)
-      // for (int cur_column = blockIdx.y * 2; cur_column < blockIdx.y * 2 + 2; cur_column++) // this hangs
-      {
-        int owner = cur_column % num_gpus;
-        if (owner == params.rank) // already the owner
-        {
-          continue;
-        }
-        volatile int* state = done + cur_column;
-        volatile int* responsible = done2 + cur_column;
-        if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-        {
-          int preval = atomicAdd((int*) state, 1);
-          if (preval == 0)
-          {
-            *responsible = blockId;
-          }
-          // else
-          // {
-          //   if (params.rank == 0 && threadIdx.x == 0)
-          //     printf("nores %d %d: %d %p, blockIdx %d %d %d\n", (int) threadblock_tile_offset.m(), (int) cur_column, (int) preval, state, (int) blockIdx.x, (int) blockIdx.y, (int) blockIdx.z);
-          // }
-        }
-        __syncthreads();
-        if (*responsible == blockId)
-        // invoke get
-        {
-          int channel_idx = owner > params.rank ? (owner - 1) : owner;
+//       int num_gpus = params.channel_size + 1;
+//       int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
+//       for (int cur_column = 0; cur_column < total_columns; cur_column++)
+//       // for (int cur_column = blockIdx.y * 2; cur_column < blockIdx.y * 2 + 2; cur_column++) // this hangs
+//       {
+//         int owner = cur_column % num_gpus;
+//         if (owner == params.rank) // already the owner
+//         {
+//           continue;
+//         }
+//         volatile int* state = done + cur_column;
+//         volatile int* responsible = done2 + cur_column;
+//         if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+//         {
+//           int preval = atomicAdd((int*) state, 1);
+//           if (preval == 0)
+//           {
+//             *responsible = blockId;
+//           }
+//           // else
+//           // {
+//           //   if (params.rank == 0 && threadIdx.x == 0)
+//           //     printf("nores %d %d: %d %p, blockIdx %d %d %d\n", (int) threadblock_tile_offset.m(), (int) cur_column, (int) preval, state, (int) blockIdx.x, (int) blockIdx.y, (int) blockIdx.z);
+//           // }
+//         }
+//         __syncthreads();
+//         if (*responsible == blockId)
+//         // invoke get
+//         {
+//           int channel_idx = owner > params.rank ? (owner - 1) : owner;
 
-          const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
-          const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
-          const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
-          for (int rowIndex = startRowIndex + RowCopyGroupIdx;
-              rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
-              rowIndex += RowCopyGroup)
-          {
-            int row_skip = rowIndex * params.problem_size.k();
-            int column_skip = cur_column * prev_kN;
-            int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.k());
-            int dest_offset =  (row_skip + column_skip) + owner * (params.problem_size.m() * params.problem_size.k());
-            params.smChannels[channel_idx].get(
-                          sizeof(cutlass::half_t) * dest_offset,
-                          sizeof(cutlass::half_t) * src_offset,
-                          prev_kN * sizeof(cutlass::half_t),
-                          threadIdx.x % ColCopyThreads, ColCopyThreads);
-          }
-          __syncthreads();
-#define STATE_MAGIC 0x12345
-          if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
-          {
-            (*responsible) = STATE_MAGIC;
-          }
-        }
-      }
-      __syncthreads();
+//           const int ColCopyThreads = Mma::Shape::kN * sizeof(half) / 16;
+//           const int RowCopyGroup = blockDim.x / ColCopyThreads; // blockDim.x (= WarpShape / InstructionShape * 32) / ColCopyThreads
+//           const int RowCopyGroupIdx = threadIdx.x / ColCopyThreads;
+//           for (int rowIndex = startRowIndex + RowCopyGroupIdx;
+//               rowIndex < startRowIndex + Mma::Shape::kM && rowIndex < params.problem_size.m();
+//               rowIndex += RowCopyGroup)
+//           {
+//             int row_skip = rowIndex * params.problem_size.k();
+//             int column_skip = cur_column * prev_kN;
+//             int src_offset =  (row_skip + column_skip) + params.rank * (params.problem_size.m() * params.problem_size.k());
+//             int dest_offset =  (row_skip + column_skip) + owner * (params.problem_size.m() * params.problem_size.k());
+//             params.smChannels[channel_idx].get(
+//                           sizeof(cutlass::half_t) * dest_offset,
+//                           sizeof(cutlass::half_t) * src_offset,
+//                           prev_kN * sizeof(cutlass::half_t),
+//                           threadIdx.x % ColCopyThreads, ColCopyThreads);
+//           }
+//           __syncthreads();
+// #define STATE_MAGIC 0x12345
+//           if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
+//           {
+//             (*responsible) = STATE_MAGIC;
+//           }
+//         }
+//       }
+//       __syncthreads();
 
-      for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
-      {
-        int owner = cur_column % num_gpus;
-        if (owner == params.rank) // already the owner
-          continue;
-        volatile int* state = done + cur_column;
-        volatile int* responsible = done2 + cur_column;
-        while ((*responsible) != STATE_MAGIC) {}
-      }
+//       for (int cur_column = threadIdx.x; cur_column < total_columns; cur_column += blockDim.x)
+//       {
+//         int owner = cur_column % num_gpus;
+//         if (owner == params.rank) // already the owner
+//           continue;
+//         volatile int* state = done + cur_column;
+//         volatile int* responsible = done2 + cur_column;
+//         while ((*responsible) != STATE_MAGIC) {}
+//       }
       
-      __syncthreads();
+//       __syncthreads();
     }
     // ----------- AllGather ends ---------------
 
@@ -385,7 +385,14 @@ struct Gemm {
     if (!kSplitKSerial || gemm_k_iterations > 0) {
       // Compute threadblock-scoped matrix multiply-add
 #ifdef USEGEMM
-      mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators/*, params.rank, params.ref_A.data(), iterator_A.get()*/);
+      // if (params.rank == 0)
+      //   printf("%p %p %d, thread %d out of %d from %d %d %d\n",
+      //         params.ref_A.data(), iterator_A.get(), (int) ((long long) iterator_A.get() - (long long) params.ref_A.data()),
+      //         threadIdx.x, blockDim.x, blockIdx.x, blockIdx.y, blockIdx.z);
+      mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators,
+        params.kernel_case == 2 && params.channel_size > 0, params.rank,
+        (int) threadblock_tile_offset.m(),
+        params.atmoic_counter, params.smChannels);
 #endif
     }
 
