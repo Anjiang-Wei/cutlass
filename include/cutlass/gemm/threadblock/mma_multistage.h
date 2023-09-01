@@ -381,6 +381,7 @@ public:
   void get_transfer(int rank, int tile_offset_m, int tile_offset_n, int* atomic_counter, 
                         mscclpp::SmChannel::DeviceHandle* smChannels)
   {
+  #define STATE_MAGIC 0x12345
     const int kM = 128;
     const int kN = 128;
     const int problem_m = 2048;
@@ -408,7 +409,7 @@ public:
     int owner = tile_offset_n % num_gpus;
     
     int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
-    if (owner != rank) // not the owner
+    if (owner != rank && (*responsible) != STATE_MAGIC) // not the owner, and not ready yet
     {
       if (threadIdx.x == 0)
       {
@@ -452,7 +453,6 @@ public:
                         threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
         __syncthreads();
-        #define STATE_MAGIC 0x12345
         if (threadIdx.x == 0)
         {
           (*responsible) = STATE_MAGIC;
