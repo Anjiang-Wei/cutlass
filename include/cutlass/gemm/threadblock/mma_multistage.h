@@ -394,31 +394,32 @@ public:
 
     // address_offset = 0;
     // element_idx = 0;
-    // int index = (tile_offset_m * problem_n / kN) + tile_offset_n;
+    const int offset_n_max = 96;
+    int index = (tile_offset_m * offset_n_max) + tile_offset_n;
     // index = 0;
     // if (rank == 1)
     //     printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
     //         element_idx, row_idx, col_idx, index,
     //         threadIdx.x, blockDim.x, blockIdx.x, blockIdx.y, blockIdx.z);
 
-    // volatile int* state = atomic_counter + 8 + index;
-    // volatile int* responsible = atomic_counter + 2048 + index;
+    volatile int* state = atomic_counter + 8 + index;
+    volatile int* responsible = atomic_counter + 2048 + index;
 
     int owner = tile_offset_n % num_gpus;
     
     int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
     if (owner != rank) // not the owner
     {
-      // if (threadIdx.x == 0)
-      // {
-      //   int preval = atomicAdd((int*) state, 1);
-      //   if (preval == 0)
-      //   {
-      //     *responsible = blockId;
-      //   }
-      // }
-      // __syncthreads();
-      // if (*responsible == blockId) // invoke get
+      if (threadIdx.x == 0)
+      {
+        int preval = atomicAdd((int*) state, 1);
+        if (preval == 0)
+        {
+          *responsible = blockId;
+        }
+      }
+      __syncthreads();
+      if (*responsible == blockId) // invoke get
       {
         // if (rank == 1)
         // printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
@@ -451,16 +452,16 @@ public:
                         threadIdx.x % ColCopyThreads, ColCopyThreads);
         }
         __syncthreads();
-        // #define STATE_MAGIC 0x12345
-        // if (threadIdx.x == 0)
-        // {
-        //   (*responsible) = STATE_MAGIC;
-        // }
-        // __syncthreads();
+        #define STATE_MAGIC 0x12345
+        if (threadIdx.x == 0)
+        {
+          (*responsible) = STATE_MAGIC;
+        }
       }
+      // __syncthreads();
+      while ((*responsible) != STATE_MAGIC) {}
+      // __syncthreads();
     }
-    // while ((*responsible) != STATE_MAGIC) {}
-    // __syncthreads();
   }
 
   /// GEMM prologue.  Bootstrap the global->shared memory pipeline by fetching
@@ -807,7 +808,9 @@ public:
     CUTLASS_GEMM_LOOP // from 379 to -4,  384 = 96 * 4; Base::kWarpGemmIterations = 2
     for (; gemm_k_iterations > (-Base::kStages + 1);) {
       if (transfer && i % 4 == 0 && gemm_k_iterations > 0)
+      {
         get_transfer(rank, tile_offset_m, (i / 4 + 1), atomic_counter, smChannels);
+      }
       mac_loop_iter(
         pipe_state,
         accum,
