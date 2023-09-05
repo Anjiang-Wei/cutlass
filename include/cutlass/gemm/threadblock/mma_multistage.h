@@ -409,7 +409,10 @@ public:
     int owner = tile_offset_n % num_gpus;
     
     int blockId = blockIdx.x * gridDim.y * gridDim.z + blockIdx.y * gridDim.z + blockIdx.z + 1;
-    if (owner != rank && (*responsible) != STATE_MAGIC) // not the owner, and not ready yet
+    uint responsible_val = 0;
+    if (threadIdx.x % 32 == 0) responsible_val = *responsible;
+    responsible_val = __shfl_sync(0xFFFFFFFF, responsible_val, 0, 32);
+    if (owner != rank && responsible_val != STATE_MAGIC) // not the owner, and not ready yet
     {
       if (threadIdx.x == 0)
       {
@@ -420,11 +423,27 @@ public:
         }
       }
       __syncthreads();
-      if (*responsible == blockId) // invoke get
+      uint responsible_val = 0;
+    if (threadIdx.x % 32 == 0) responsible_val = *responsible;
+    responsible_val = __shfl_sync(0xFFFFFFFF, responsible_val, 0, 32);
+      if (responsible_val == blockId) // invoke get
       {
+        // // ensure entered only once
+        // volatile int* done3 = atomic_counter + 4096 + index;
+        // if (threadIdx.x == 0) {
+        //   if (*done3 == 0)
+        //   {
+        //     *done3 = 1;
+        //   }
+        //   else
+        //   {
+        //     printf("Enter multiple times %d\n", index);
+        //   }
+        // }
+        // __syncthreads();
         // if (rank == 1)
-        // printf("element_idx %d row_idx %d col_idx %d, index %d, threadIdx.x %d from %d, block %d %d %d\n",
-        //     element_idx, row_idx, col_idx, index,
+        // printf("index %d tile_offset_m %d tile_offset_n %d, threadIdx.x %d from %d, block %d %d %d\n",
+        //     index, tile_offset_m, tile_offset_n,
         //     threadIdx.x, blockDim.x, blockIdx.x, blockIdx.y, blockIdx.z);
         // if (rank == 1 && threadIdx.x == 0)
         //   printf("tile_offset_m %d\n", tile_offset_m);
@@ -459,8 +478,11 @@ public:
         }
       }
       // __syncthreads();
-      while ((*responsible) != STATE_MAGIC) {}
-      // __syncthreads();
+      if (threadIdx.x == 0)
+      {
+        while ((*responsible) != STATE_MAGIC) {}
+      }
+      __syncthreads();
     }
   }
 
@@ -809,6 +831,9 @@ public:
     for (; gemm_k_iterations > (-Base::kStages + 1);) {
       if (transfer && i % 4 == 0 && gemm_k_iterations > 0)
       {
+        // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+        //   printf("tile_offset_m %d, (i / 4 + 1) %d\n", tile_offset_m, (i / 4 + 1));
+        // __syncthreads();
         get_transfer(rank, tile_offset_m, (i / 4 + 1), atomic_counter, smChannels);
       }
       mac_loop_iter(
