@@ -825,16 +825,16 @@ public:
     //     get_transfer(rank, tile_offset_m, i, atomic_counter, smChannels);
     //   }
     // }
-    int i = 0;
+    int i = blockIdx.y * 13 * 4;
     // Mainloop
-    CUTLASS_GEMM_LOOP // from 379 to -4,  384 = 96 * 4; Base::kWarpGemmIterations = 2
+    CUTLASS_GEMM_LOOP // from 380 to -4,  384 = 96 * 4; Base::kWarpGemmIterations = 2
     for (; gemm_k_iterations > (-Base::kStages + 1);) {
       if (transfer && i % 4 == 0 && gemm_k_iterations > 0)
       {
         // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
         //   printf("tile_offset_m %d, (i / 4 + 1) %d\n", tile_offset_m, (i / 4 + 1));
         // __syncthreads();
-        get_transfer(rank, tile_offset_m, (i / 4 + 1), atomic_counter, smChannels);
+        get_transfer(rank, tile_offset_m, (i / 4 + 1) % 96, atomic_counter, smChannels);
       }
       mac_loop_iter(
         pipe_state,
